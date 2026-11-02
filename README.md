@@ -120,6 +120,40 @@ better than detailed ones. Two ways to map one:
 The **Spin** slider rotates the picture around the tree continuously, and
 **Turn** nudges where it starts.
 
+### Physical buttons (optional)
+
+Bluetooth is not an option here: the Pico 2 W's radio has BLE silicon, but
+CircuitPython does not expose it — the `_bleio` docs say Pico W boards
+support BLE only through an *external* AirLift co-processor, and the
+[feature request](https://github.com/adafruit/circuitpython/issues/7693) has
+been open and unassigned since 2023. Five wired buttons do the same job with
+no extra library and nothing to pair or charge.
+
+Wire each momentary switch between its pin and **ground** — the internal
+pull-ups mean no resistors. The defaults are GP2–GP6, changeable in
+**Admin → Buttons**, which also reports any pin it could not claim.
+
+| | While the tree runs its own show | While a phone is playing |
+| --- | --- | --- |
+| **◀ ▶** | previous / next idle pattern | controller for the phone's game |
+| **▲ ▼** | brightness down / up | controller for the phone's game |
+| **select** | start Snake on the tree | the game's action button |
+| **hold select** | leave the game / all off | — |
+
+So the buttons work two ways. On their own they drive the board directly,
+including a full game of Snake with no phone involved — the on-board game
+uses the same grid as the browser's, built by `Geometry.build_grid()`, so
+the two behave identically. When a phone *is* driving, the presses are
+queued and the web app collects them from `/api/input`, which turns the
+buttons into a handheld controller for the phone's games.
+
+Pattern and brightness changes made with the buttons are written to flash
+about twenty seconds after the last press, so holding a direction does not
+wear the filesystem out.
+
+Directions auto-repeat when held; `select` does not, so a hold is always a
+distinct gesture.
+
 ### Idle patterns
 
 Sixteen of them: Rainbow Spiral, Candy Cane, Twinkle Stars, Snowfall,
@@ -135,8 +169,10 @@ These run on the board, so they keep going once you close the page.
 | File | What it is |
 | --- | --- |
 | `code.py` | Boot, wifi, HTTP API, main loop |
-| `tree.py` | Config and the geometry model (the per-pixel angle/height tables) |
+| `tree.py` | Config, the geometry model (per-pixel angle/height tables) and the game grid |
 | `patterns.py` | The idle animations |
+| `buttons.py` | Debounced reader for the optional GPIO buttons |
+| `snake.py` | Snake played on the board itself, with the buttons |
 | `boot.py` | Makes the flash writable when no computer is attached |
 | `www/` | The web app (`app.js` core, `games.js`, `paint.js`, `admin.js`) |
 | `tools/simulator.py` | Runs the whole web app on a laptop, no hardware |
@@ -163,6 +199,7 @@ add an endpoint to one, add it to the other.**
 | `GET` | `/api/state` | Mode, config, pattern list, free memory |
 | `GET` | `/api/geometry` | Loop lengths and the per-pixel angle/height tables (hex) |
 | `GET` | `/api/frame` | The frame currently on the tree, as hex |
+| `GET` | `/api/input` | Drain queued button presses (used as a controller by the web app) |
 | `POST` | `/api/frame` | Show a frame: `3 × num_pixels` raw bytes, or the same as hex |
 | `POST` | `/api/config` | Apply and save a partial config update |
 | `POST` | `/api/mode` | `{"mode": "idle"}` or `{"mode": "off"}` |

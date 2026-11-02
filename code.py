@@ -26,7 +26,9 @@ import socketpool
 import wifi
 from adafruit_httpserver import POST, JSONResponse, Request, Response, Server
 
+import buttons as button_driver
 import patterns
+import snake as snake_game
 import tree
 
 def body_json(request):
@@ -46,6 +48,7 @@ def body_json(request):
 MODE_IDLE = "idle"
 MODE_LIVE = "live"
 MODE_TEST = "test"
+MODE_GAME = "game"  # the on-board game, played with the physical buttons
 
 #: Back to the idle show this long after the last frame from a phone.
 LIVE_TIMEOUT = 4.0
@@ -64,6 +67,18 @@ last_frame_at = 0.0
 last_test_at = 0.0
 last_render_at = 0.0
 cycle_started_at = 0.0
+onboard_game = None
+controls = None
+input_queue = []
+config_dirty = False
+last_config_save = 0.0
+
+#: How long a button press waits to be collected by the web app.
+INPUT_TTL = 2.0
+#: Button-driven changes are applied at once but written to flash lazily, so
+#: holding a direction does not hammer the filesystem.
+CONFIG_SAVE_DELAY = 20.0
+
 pixels = None
 _readback = None
 _hardware_signature = None
@@ -209,12 +224,114 @@ pixels.show()
 time.sleep(0.3)
 blank()
 
+controls = button_driver.Buttons(cfg)
+if controls.active:
+    print("Buttons wired: %s" % ", ".join(sorted(controls.pins.keys())))
+for warning in controls.warnings:
+    print("Button warning -- %s" % warning)
+
 network_mode, network_address = start_network()
 advertise_mdns()
 
 pool = socketpool.SocketPool(wifi.radio)
 server = Server(pool, "/www", debug=False)
 server.request_buffer_size = 2048
+
+
+# --------------------------------------------------------------------------
+# Physical buttons
+# --------------------------------------------------------------------------
+def stop_onboard_game():
+    global onboard_game
+    onboard_game = None
+
+
+def start_onboard_game(now):
+    """Start Snake on the board itself, played with the buttons."""
+    global onboard_game, mode
+    onboard_game = snake_game.Snake(geo, cfg["cols"], cfg["snake_wrap"] != "ring")
+    onboard_game.reset(now)
+    mode = MODE_GAME
+    set_brightness(cfg["brightness"])
+
+
+def next_pattern(offset, now):
+    global config_dirty
+    current = patterns.NAMES.index(show.name) if show.name in patterns.NAMES else 0
+    show.set_pattern(patterns.NAMES[(current + offset) % len(patterns.NAMES)], now)
+    cfg["idle_pattern"] = show.name
+    config_dirty = True
+
+
+def nudge_brightness(step):
+    global config_dirty
+    value = cfg["idle_brightness"] + step
+    cfg["idle_brightness"] = min(1.0, max(0.02, value))
+    set_brightness(cfg["idle_brightness"])
+    config_dirty = True
+
+
+def handle_buttons(now):
+    """Read the buttons and act on them.
+
+    While a phone is driving the tree the presses are only queued, so the web
+    app can use them as a handheld controller for its own games.  The rest of
+    the time they drive the board directly.
+    """
+    global mode, cycle_started_at, last_render_at, last_test_at
+
+    if controls is None or not controls.active:
+        return
+
+    for label, kind in controls.poll(now):
+        if kind == "release":
+            continue
+
+        # Always queue the press for the web app to collect.
+        if kind in ("press", "repeat"):
+            input_queue.append((now, label))
+            if len(input_queue) > 24:
+                del input_queue[0]
+
+        if mode == MODE_LIVE:
+            continue  # the phone is in charge; it will read the queue
+
+        if onboard_game is not None:
+            if kind in ("press", "repeat") and label != "select":
+                onboard_game.input(label)
+            elif label == "select" and kind == "press":
+                onboard_game.reset(now)
+            elif label == "select" and kind == "hold":
+                stop_onboard_game()
+                mode = MODE_IDLE
+                cycle_started_at = now
+                set_brightness(cfg["idle_brightness"])
+            continue
+
+        if mode == MODE_TEST:
+            # Any press leaves a calibration pattern and goes back to idle.
+            mode = MODE_IDLE
+            cycle_started_at = now
+            set_brightness(cfg["idle_brightness"])
+            continue
+
+        if label == "select":
+            if kind == "press":
+                start_onboard_game(now)
+            elif kind == "hold":
+                mode = MODE_TEST
+                last_test_at = now
+                blank()
+        elif kind in ("press", "repeat"):
+            if label == "left":
+                next_pattern(-1, now)
+            elif label == "right":
+                next_pattern(1, now)
+            elif label == "up":
+                nudge_brightness(0.05)
+            elif label == "down":
+                nudge_brightness(-0.05)
+            last_render_at = 0.0
 
 
 # --------------------------------------------------------------------------
@@ -236,6 +353,13 @@ def state_payload():
         "restart_keys": list(tree.RESTART_KEYS),
         "uptime": int(time.monotonic()),
         "free_memory": gc.mem_free(),
+        "buttons": {
+            "active": controls.active if controls else False,
+            "wired": sorted(controls.pins.keys()) if controls else [],
+            "warnings": controls.warnings if controls else [],
+            "labels": list(button_driver.LABELS),
+        },
+        "onboard_game": onboard_game is not None,
     }
 
 
@@ -247,6 +371,20 @@ def route_state(request: Request):
 @server.route("/api/geometry")
 def route_geometry(request: Request):
     return JSONResponse(request, geo.describe())
+
+
+@server.route("/api/input")
+def route_input(request: Request):
+    """Button presses waiting to be used as a controller by the web app.
+
+    Each call drains the queue.  Presses older than a couple of seconds are
+    dropped rather than replayed, so a page that reconnects does not get a
+    burst of stale input.
+    """
+    now = time.monotonic()
+    presses = [label for when, label in input_queue if now - when < INPUT_TTL]
+    del input_queue[:]
+    return JSONResponse(request, {"presses": presses, "mode": mode})
 
 
 @server.route("/api/config", POST)
@@ -264,8 +402,13 @@ def route_config(request: Request):
     if incoming.get("interpolate_front"):
         cfg["front"] = tree.interpolate_front(cfg["front"], cfg["calibrated"])
 
+    if any(key in changes for key in tree.BUTTON_KEYS):
+        controls.configure(cfg)
+
     build_pixels()
     rebuild_geometry()
+    if onboard_game is not None:
+        stop_onboard_game()
     if cfg["idle_pattern"] != show.name:
         show.set_pattern(cfg["idle_pattern"], time.monotonic())
     set_brightness(cfg["idle_brightness"] if mode == MODE_IDLE else cfg["brightness"])
@@ -328,6 +471,8 @@ def route_frame(request: Request):
     for i in range(count, geo.n):
         frame[i] = (0, 0, 0)
 
+    if onboard_game is not None:
+        stop_onboard_game()
     mode = MODE_LIVE
     last_frame_at = time.monotonic()
     set_brightness(cfg["brightness"])
@@ -343,6 +488,8 @@ def route_mode(request: Request):
     wanted = body_json(request).get("mode", MODE_IDLE)
 
     if wanted == MODE_IDLE:
+        if onboard_game is not None:
+            stop_onboard_game()
         mode = MODE_IDLE
         cycle_started_at = time.monotonic()
         set_brightness(cfg["idle_brightness"])
@@ -362,6 +509,8 @@ def route_test(request: Request):
     loop = int(payload.get("loop", 0)) % geo.turns
     index = int(payload.get("index", 0))
 
+    if onboard_game is not None:
+        stop_onboard_game()
     mode = MODE_TEST
     last_test_at = time.monotonic()
     set_brightness(cfg["brightness"])
@@ -438,7 +587,22 @@ def step(now):
     Separated from the ``while`` below so it can be exercised off-hardware
     (see tools/test_firmware.py).
     """
-    global mode, cycle_started_at, last_render_at
+    global mode, cycle_started_at, last_render_at, config_dirty, last_config_save
+
+    handle_buttons(now)
+
+    # Button-driven changes are written to flash well after the last one.
+    if config_dirty and now - last_config_save > CONFIG_SAVE_DELAY:
+        config_dirty = False
+        last_config_save = now
+        tree.save_config(cfg)
+
+    if mode == MODE_GAME and onboard_game is not None:
+        if now - last_render_at >= 1.0 / cfg["fps"]:
+            last_render_at = now
+            onboard_game.tick(now, frame)
+            push(frame)
+        return
 
     # Hand control back to the idle show once the phone stops sending.
     if mode == MODE_LIVE and now - last_frame_at > LIVE_TIMEOUT:

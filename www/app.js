@@ -33,6 +33,9 @@ const App = {
   queued: false,
   lastSent: 0,
   lastPolled: 0,
+  lastInput: 0,
+  pollingInput: false,
+  buttonsWired: false,
   polling: false,
   live: false,
   tab: 'play',
@@ -234,6 +237,24 @@ const App = {
     return payload;
   },
 
+  /* Collect presses from the physical buttons and hand them to whatever is
+   * being played, so the buttons work as a controller for the phone's games
+   * as well as for the board's own. */
+  async pollInput() {
+    if (this.pollingInput) return;
+    this.pollingInput = true;
+    try {
+      const data = await this.get('/api/input');
+      for (const press of data.presses || []) {
+        if (press === 'select') Games.input('action');
+        else Games.input(press);
+      }
+    } catch (err) {
+      /* nothing waiting, or the board is busy */
+    }
+    this.pollingInput = false;
+  },
+
   /* Read back the frame the board is showing, for the preview. */
   async pollFrame() {
     if (this.polling) return;
@@ -295,6 +316,10 @@ const App = {
       if ((this.dirty && since > 66) || since > 1500) {
         this.dirty = false;
         this.send();
+      }
+      if (this.buttonsWired && now - this.lastInput > 120) {
+        this.lastInput = now;
+        this.pollInput();
       }
     } else if (now - this.lastPolled > 220) {
       // Not driving: mirror whatever the tree is doing by itself.
@@ -397,6 +422,7 @@ const App = {
     }
     const state = this.state;
     if (!state) return;
+    this.buttonsWired = !!(state.buttons && state.buttons.active);
     const bits = [];
     bits.push(this.live ? 'you are driving' : 'idle show: ' + this.patternLabel(state.config.idle_pattern));
     bits.push(state.config.num_pixels + ' px · ' + this.geo.turns + ' loops');

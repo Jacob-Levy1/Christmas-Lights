@@ -66,6 +66,31 @@ class FakeStrip:
         self.deinited = True
 
 
+class FakePin:
+    """A GPIO pin with a pull-up: value is True until the switch pulls it low."""
+
+    instances = {}
+
+    def __init__(self, pin):
+        if pin in FakePin.instances and not FakePin.instances[pin].deinited:
+            raise ValueError("%s in use" % pin)
+        self.pin = pin
+        self.direction = None
+        self.pull = None
+        self.value = True
+        self.deinited = False
+        FakePin.instances[pin] = self
+
+    def deinit(self):
+        self.deinited = True
+
+    def press(self):
+        self.value = False
+
+    def release(self):
+        self.value = True
+
+
 class FakeRadio:
     def __init__(self):
         self.hostname = ""
@@ -128,8 +153,8 @@ class FakeServer:
 
 def install_stubs():
     board = types.ModuleType("board")
-    board.GP0 = "GP0"
-    board.GP1 = "GP1"
+    for number in range(0, 29):
+        setattr(board, "GP%d" % number, "GP%d" % number)
     sys.modules["board"] = board
 
     neopixel = types.ModuleType("neopixel")
@@ -145,6 +170,12 @@ def install_stubs():
     ipaddress = types.ModuleType("ipaddress")
     ipaddress.IPv4Address = lambda text: text
     sys.modules["ipaddress"] = ipaddress
+
+    digitalio = types.ModuleType("digitalio")
+    digitalio.DigitalInOut = FakePin
+    digitalio.Direction = types.SimpleNamespace(INPUT="input", OUTPUT="output")
+    digitalio.Pull = types.SimpleNamespace(UP="up", DOWN="down")
+    sys.modules["digitalio"] = digitalio
 
     socketpool = types.ModuleType("socketpool")
     socketpool.SocketPool = lambda radio: object()
@@ -330,6 +361,159 @@ def main():
     firmware.step(10010.0)
     check("auto-cycle moves to the next pattern", firmware.show.name != first,
           first + " -> " + firmware.show.name)
+
+    # ---------------------------------------------------------- buttons ---
+    check("buttons off by default", not firmware.controls.active)
+    check("no input queued when there are no buttons", call("GET", "/api/input").data["presses"] == [])
+
+    state = call("POST", "/api/config", {"buttons_enabled": True}).data
+    check("buttons claim their pins", firmware.controls.active, sorted(firmware.controls.pins))
+    check(
+        "all five buttons wired",
+        sorted(firmware.controls.pins) == ["down", "left", "right", "select", "up"],
+        sorted(firmware.controls.pins),
+    )
+    check("no warnings for a clean wiring", firmware.controls.warnings == [], firmware.controls.warnings)
+    check("state reports the buttons", state["buttons"]["active"] is True, state["buttons"])
+
+    # a pin that clashes with the strip is refused, not fatal
+    state = call("POST", "/api/config", {"button_up": "GP0"}).data
+    check(
+        "strip pin refused for a button",
+        "up" not in firmware.controls.pins and len(firmware.controls.warnings) == 1,
+        firmware.controls.warnings,
+    )
+    state = call("POST", "/api/config", {"button_up": "GP44"}).data
+    check(
+        "unknown pin refused with a warning",
+        "up" not in firmware.controls.pins and firmware.controls.warnings,
+        firmware.controls.warnings,
+    )
+    call("POST", "/api/config", {"button_up": "GP2"})
+    check("good pin restored", "up" in firmware.controls.pins, sorted(firmware.controls.pins))
+
+    def tap(label, at, hold=0.1):
+        """Press and release a button across enough polls to debounce."""
+        io = firmware.controls.pins[label]
+        io.press()
+        firmware.handle_buttons(at)
+        firmware.handle_buttons(at + 0.05)
+        io.release()
+        firmware.handle_buttons(at + hold)
+        firmware.handle_buttons(at + hold + 0.05)
+
+    # --- idle: left/right change pattern, up/down change brightness ---
+    firmware.mode = "idle"
+    firmware.show.set_pattern("rainbow_spiral", 0.0)
+    before = firmware.show.name
+    tap("right", 5000.0)
+    check("right steps to the next pattern", firmware.show.name != before,
+          before + " -> " + firmware.show.name)
+    forward = firmware.show.name
+    tap("left", 5010.0)
+    check("left steps back", firmware.show.name == before, firmware.show.name)
+
+    firmware.cfg["idle_brightness"] = 0.5
+    tap("up", 5020.0)
+    check("up raises brightness", firmware.cfg["idle_brightness"] > 0.5, firmware.cfg["idle_brightness"])
+    tap("down", 5030.0)
+    tap("down", 5040.0)
+    check("down lowers brightness", firmware.cfg["idle_brightness"] < 0.55, firmware.cfg["idle_brightness"])
+
+    brightness_floor = firmware.cfg["idle_brightness"]
+    for k in range(40):
+        tap("down", 5100.0 + k)
+    check("brightness cannot go to zero", firmware.cfg["idle_brightness"] >= 0.02,
+          firmware.cfg["idle_brightness"])
+
+    # --- select starts the on-board game ---
+    tap("select", 6000.0)
+    check("select starts the on-board game", firmware.onboard_game is not None and firmware.mode == "game",
+          firmware.mode)
+
+    firmware.last_render_at = 0
+    firmware.step(6001.0)
+    lit = sum(1 for c in firmware.pixels.buffer if sum(c) > 0)
+    check("on-board game draws on the strip", lit > 0, "%d lit" % lit)
+
+    game = firmware.onboard_game
+    check("game grid matches the tree", len(game.grid) == firmware.geo.turns
+          and len(game.grid[0]) == firmware.cfg["cols"],
+          "%dx%d" % (len(game.grid), len(game.grid[0])))
+    check("every game cell has a pixel", all(cell for row in game.grid for cell in row))
+
+    # directions reach the game
+    game.body = [(2, 2)]
+    game.direction = "right"
+    tap("up", 6010.0)
+    check("buttons steer the on-board game", game.pending == "up" or game.direction == "up",
+          "%s/%s" % (game.pending, game.direction))
+
+    # the spiral wrap climbs a layer, like the strip does
+    game.spiral = True
+    check("going past the front climbs a layer",
+          game._step((3, game.cols - 1), "right") == (4, 0),
+          game._step((3, game.cols - 1), "right"))
+    game.spiral = False
+    check("ring mode stays on its layer",
+          game._step((3, game.cols - 1), "right") == (3, 0),
+          game._step((3, game.cols - 1), "right"))
+
+    # running off the top or bottom ends the game
+    game.spiral = True
+    game.body = [(game.rows - 1, 0)]
+    game.direction = "up"
+    game.dead_at = 0.0
+    game._advance(6100.0)
+    check("running off the top is a death", game.dead_at > 0, game.dead_at)
+
+    # --- holding select leaves the game ---
+    io = firmware.controls.pins["select"]
+    io.press()
+    firmware.handle_buttons(6200.0)
+    firmware.handle_buttons(6200.05)
+    firmware.handle_buttons(6201.0)   # past the hold threshold
+    io.release()
+    firmware.handle_buttons(6201.2)
+    check("holding select leaves the on-board game",
+          firmware.onboard_game is None and firmware.mode == "idle", firmware.mode)
+
+    # --- presses are queued for the web app while a phone is driving ---
+    del firmware.input_queue[:]
+    call("POST", "/api/frame", bytes([5, 5, 5] * firmware.geo.n))
+    check("phone takes over", firmware.mode == "live", firmware.mode)
+    tap("left", 7000.0)
+    tap("select", 7010.0)
+    queued = call("GET", "/api/input").data["presses"]
+    check("presses queued for the web app", queued == ["left", "select"], queued)
+    check("queue drains on read", call("GET", "/api/input").data["presses"] == [])
+
+    firmware.mode = "live"
+    firmware.show.set_pattern("rainbow_spiral", 0.0)
+    held = firmware.show.name
+    tap("right", 7100.0)
+    check("buttons do not change the board while a phone is driving",
+          firmware.show.name == held, firmware.show.name)
+
+    # stale presses are dropped rather than replayed
+    del firmware.input_queue[:]
+    firmware.input_queue.append((0.0, "up"))
+    check("stale presses are dropped", call("GET", "/api/input").data["presses"] == [])
+
+    # a phone frame stops the on-board game
+    firmware.mode = "idle"
+    tap("select", 7200.0)
+    check("game started again", firmware.onboard_game is not None)
+    call("POST", "/api/frame", bytes([1, 1, 1] * firmware.geo.n))
+    check("a phone frame stops the on-board game",
+          firmware.onboard_game is None and firmware.mode == "live", firmware.mode)
+
+    # turning the buttons off releases the pins
+    call("POST", "/api/config", {"buttons_enabled": False})
+    check("disabling the buttons frees the pins", not firmware.controls.active
+          and all(io.deinited for io in FakePin.instances.values() if io.pin.startswith("GP")
+                  and io.pin != "GP0"),
+          sorted(firmware.controls.pins))
 
     if os.path.exists(tree_module.CONFIG_PATH):
         saved = json.load(open(tree_module.CONFIG_PATH))

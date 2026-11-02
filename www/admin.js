@@ -226,6 +226,11 @@ const Admin = {
       document.getElementById('staFields').hidden = mode !== 'sta';
     });
 
+    const buttonsEnabled = document.getElementById('buttonsEnabled');
+    buttonsEnabled.addEventListener('change', () => {
+      document.getElementById('buttonFields').hidden = !buttonsEnabled.checked;
+    });
+
     document.getElementById('adminSave').addEventListener('click', () => this.save());
     document.getElementById('adminRestart').addEventListener('click', async () => {
       App.toast('restarting — reconnect in a few seconds');
@@ -250,6 +255,12 @@ const Admin = {
       sta_ssid: document.getElementById('staSsid').value,
       sta_password: document.getElementById('staPassword').value,
       hostname: document.getElementById('hostname').value,
+      buttons_enabled: document.getElementById('buttonsEnabled').checked,
+      button_up: document.getElementById('buttonUp').value.trim(),
+      button_down: document.getElementById('buttonDown').value.trim(),
+      button_left: document.getElementById('buttonLeft').value.trim(),
+      button_right: document.getElementById('buttonRight').value.trim(),
+      button_select: document.getElementById('buttonSelect').value.trim(),
     };
     try {
       const result = await App.pushConfig(patch);
@@ -285,6 +296,26 @@ const Admin = {
     document.getElementById('staSsid').value = cfg.sta_ssid;
     document.getElementById('staPassword').value = cfg.sta_password;
     document.getElementById('hostname').value = cfg.hostname;
+    document.getElementById('buttonsEnabled').checked = !!cfg.buttons_enabled;
+    document.getElementById('buttonFields').hidden = !cfg.buttons_enabled;
+    document.getElementById('buttonUp').value = cfg.button_up || '';
+    document.getElementById('buttonDown').value = cfg.button_down || '';
+    document.getElementById('buttonLeft').value = cfg.button_left || '';
+    document.getElementById('buttonRight').value = cfg.button_right || '';
+    document.getElementById('buttonSelect').value = cfg.button_select || '';
+
+    const buttons = state.buttons || {};
+    const status = document.getElementById('buttonStatus');
+    if (buttons.warnings && buttons.warnings.length) {
+      status.textContent = 'Problem: ' + buttons.warnings.join('; ');
+      status.style.color = 'var(--red)';
+    } else if (buttons.active) {
+      status.textContent = 'Wired up: ' + (buttons.wired || []).join(', ');
+      status.style.color = 'var(--green)';
+    } else {
+      status.textContent = cfg.buttons_enabled ? 'No pins claimed yet.' : '';
+      status.style.color = '';
+    }
 
     document.querySelectorAll('#snakeWrap button').forEach((b) => {
       b.classList.toggle('on', b.dataset.wrap === cfg.snake_wrap);

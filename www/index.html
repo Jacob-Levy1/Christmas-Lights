@@ -187,6 +187,18 @@
     <button data-wrap="ring">Snake stays on its ring</button>
   </div>
 
+  <h2>Buttons</h2>
+  <div class="hint">Optional. Wire each switch between its pin and ground — no resistors needed. While the tree is running its own show the buttons change pattern (◀ ▶) and brightness (▲ ▼), and <b>select</b> starts Snake on the tree itself. While a phone is playing, the buttons work as a controller for it.</div>
+  <label class="check"><input type="checkbox" id="buttonsEnabled"> Use physical buttons</label>
+  <div id="buttonFields">
+    <label class="field">Up <input type="text" id="buttonUp" placeholder="GP2"></label>
+    <label class="field">Down <input type="text" id="buttonDown" placeholder="GP3"></label>
+    <label class="field">Left <input type="text" id="buttonLeft" placeholder="GP4"></label>
+    <label class="field">Right <input type="text" id="buttonRight" placeholder="GP5"></label>
+    <label class="field">Select <input type="text" id="buttonSelect" placeholder="GP6"></label>
+    <div class="hint" id="buttonStatus"></div>
+  </div>
+
   <h2>Wifi</h2>
   <div class="row segmented" id="wifiMode">
     <button data-wifi="ap" class="on">Own hotspot</button>

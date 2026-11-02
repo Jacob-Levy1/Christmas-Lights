@@ -56,6 +56,15 @@ DEFAULTS = {
     # --- games ----------------------------------------------------------
     "cols": 16,  # angular columns of the game grid
     "snake_wrap": "spiral",  # "spiral" (wrapping climbs a layer) or "ring"
+    # --- optional physical buttons --------------------------------------
+    # Each switch goes between its pin and ground; the internal pull-ups do
+    # the rest.  Leave a pin blank to leave that button out.
+    "buttons_enabled": False,
+    "button_up": "GP2",
+    "button_down": "GP3",
+    "button_left": "GP4",
+    "button_right": "GP5",
+    "button_select": "GP6",
     # --- networking -----------------------------------------------------
     "wifi_mode": "ap",  # "ap" = own hotspot, "sta" = join your wifi
     "ap_ssid": "ChristmasTree",
@@ -85,7 +94,11 @@ _FLOAT_KEYS = (
     "idle_brightness",
     "rotation",
 )
-_BOOL_KEYS = ("start_at_bottom", "clockwise", "idle_cycle")
+_BOOL_KEYS = ("start_at_bottom", "clockwise", "idle_cycle", "buttons_enabled")
+
+#: Changing any of these re-claims the GPIO pins.
+BUTTON_KEYS = ("buttons_enabled",) + tuple("button_" + name for name in
+                                           ("up", "down", "left", "right", "select"))
 
 _LIMITS = {
     "num_pixels": (1, 1200),
@@ -361,6 +374,55 @@ class Geometry:
             if row >= GRID_H:
                 row = GRID_H - 1
             self.grid_of[i] = row * GRID_W + col
+
+    def build_grid(self, cols):
+        """Group the pixels into a ``turns`` x ``cols`` grid on the cone.
+
+        Row 0 is the bottom loop whichever end of the strip starts there, so
+        "up" always means up.  This is the same mapping ``www/app.js`` builds
+        for the browser games -- keep the two in step.
+
+        Loops near the top are shorter than ``cols``, so some cells have no
+        pixel of their own; those borrow the nearest pixel in the same loop,
+        which is the best the real tree can do and leaves nothing invisible.
+        """
+        cols = max(1, int(cols))
+        turns = self.turns
+
+        order = sorted(range(turns), key=lambda k: self.height_of[k])
+        row_of_loop = [0] * turns
+        for row, loop in enumerate(order):
+            row_of_loop[loop] = row
+
+        grid = [[[] for _ in range(cols)] for _ in range(turns)]
+        in_row = [[] for _ in range(turns)]
+        for i in range(self.n):
+            row = row_of_loop[self.loop_of[i]]
+            col = int(self.u[i] * cols / 256.0 + 0.5) % cols
+            grid[row][col].append(i)
+            in_row[row].append(i)
+
+        for row in range(turns):
+            candidates = in_row[row]
+            if not candidates:
+                continue
+            for col in range(cols):
+                if grid[row][col]:
+                    continue
+                wanted = col / cols
+                best = candidates[0]
+                best_gap = 2.0
+                for i in candidates:
+                    gap = abs(self.u[i] / 256.0 - wanted)
+                    if gap > 0.5:
+                        gap = 1.0 - gap
+                    if gap < best_gap:
+                        best_gap = gap
+                        best = i
+                grid[row][col].append(best)
+
+        self.row_of_loop = row_of_loop
+        return grid
 
     def front_pixel(self, loop):
         """Index of the pixel in ``loop`` that should be facing you."""

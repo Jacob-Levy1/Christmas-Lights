@@ -51,6 +51,9 @@ class Tree:
         self.show = patterns.Patterns(self.geo, self.cfg)
         self.mode = "idle"
         self.started = time.monotonic()
+        # Pretend-wired buttons: POST /api/sim/press to simulate a press.
+        self.buttons = []
+        self.presses = []
         self.last_frame_at = 0.0
         self.lock = threading.Lock()
 
@@ -72,6 +75,13 @@ class Tree:
             "restart_keys": list(tree.RESTART_KEYS),
             "uptime": int(time.monotonic() - self.started),
             "free_memory": 128 * 1024,
+            "buttons": {
+                "active": bool(self.buttons),
+                "wired": sorted(self.buttons),
+                "warnings": [],
+                "labels": ["up", "down", "left", "right", "select"],
+            },
+            "onboard_game": False,
         }
 
     def blank(self):
@@ -135,6 +145,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/geometry":
             with TREE.lock:
                 return self.reply_json(TREE.geo.describe())
+        if path == "/api/sim/grid":
+            # The board's own game grid, so tests can prove the browser
+            # builds exactly the same one.
+            with TREE.lock:
+                return self.reply_json({"grid": TREE.geo.build_grid(TREE.cfg["cols"])})
+        if path == "/api/input":
+            with TREE.lock:
+                presses = list(TREE.presses)
+                TREE.presses = []
+                return self.reply_json({"presses": presses, "mode": TREE.mode})
         if path in ("/api/frame", "/api/sim/frame"):
             with TREE.lock:
                 flat = bytearray()
@@ -214,6 +234,14 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.read_json()
             with TREE.lock:
                 return self.reply_json(run_test(payload))
+
+        if path == "/api/sim/press":
+            payload = self.read_json()
+            with TREE.lock:
+                TREE.buttons = payload.get("wired", ["up", "down", "left", "right", "select"])
+                if payload.get("press"):
+                    TREE.presses.append(payload["press"])
+            return self.reply_json({"queued": len(TREE.presses), "wired": TREE.buttons})
 
         if path == "/api/restart":
             return self.reply_json({"restarting": True})
