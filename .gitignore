@@ -1,0 +1,6 @@
+# Written by the board at runtime when the admin settings are saved.
+config.json
+
+# Local development
+__pycache__/
+*.pyc
