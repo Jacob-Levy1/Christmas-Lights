@@ -53,7 +53,7 @@ MODE_GAME = "game"  # the on-board game, played with the physical buttons
 #: Back to the idle show this long after the last frame from a phone.
 LIVE_TIMEOUT = 4.0
 #: Back to the idle show this long after the last admin test command.
-TEST_TIMEOUT = 300.0
+TEST_TIMEOUT = 60.0
 
 cfg = tree.load_config()
 config_persisted = True
@@ -67,6 +67,11 @@ last_frame_at = 0.0
 last_test_at = 0.0
 last_render_at = 0.0
 cycle_started_at = 0.0
+#: Measured frames actually pushed to the strip, so the admin page can show
+#: whether the lights are really being driven.
+frames_shown = 0
+frames_window_at = 0.0
+frames_per_second = 0.0
 onboard_game = None
 controls = None
 input_queue = []
@@ -134,7 +139,12 @@ _slice_assign = True
 
 def push(colors):
     """Write a whole frame to the strip and latch it."""
-    global _slice_assign
+    global _slice_assign, frames_shown
+    frames_shown += 1
+    # Pixels before the first loop are the lead-in from the controller and
+    # are not on the tree: keep them dark whatever drew the frame.
+    for i in range(geo.offset):
+        colors[i] = (0, 0, 0)
     if _slice_assign:
         try:
             pixels[0 : geo.n] = colors
@@ -236,6 +246,10 @@ advertise_mdns()
 pool = socketpool.SocketPool(wifi.radio)
 server = Server(pool, "/www", debug=False)
 server.request_buffer_size = 2048
+# The server is synchronous: nothing is rendered while a request is being
+# served, and the stock one-second timeout means a phone that opens a
+# connection and then stalls would freeze the tree for a whole second.
+server.socket_timeout = 0.25
 
 
 # --------------------------------------------------------------------------
@@ -360,6 +374,7 @@ def state_payload():
             "labels": list(button_driver.LABELS),
         },
         "onboard_game": onboard_game is not None,
+        "fps_actual": round(frames_per_second, 1),
     }
 
 
@@ -477,7 +492,13 @@ def route_frame(request: Request):
     last_frame_at = time.monotonic()
     set_brightness(cfg["brightness"])
     push(frame)
-    return Response(request, "", status=(204, "No Content"))
+
+    # Hand back any button presses on the same round trip: a phone that is
+    # driving the tree would otherwise have to poll for them separately, and
+    # every extra request is time the strip spends not being updated.
+    presses = [label for when, label in input_queue if last_frame_at - when < INPUT_TTL]
+    del input_queue[:]
+    return JSONResponse(request, {"presses": presses})
 
 
 @server.route("/api/mode", POST)
@@ -588,6 +609,12 @@ def step(now):
     (see tools/test_firmware.py).
     """
     global mode, cycle_started_at, last_render_at, config_dirty, last_config_save
+    global frames_shown, frames_window_at, frames_per_second
+
+    if now - frames_window_at >= 1.0:
+        frames_per_second = frames_shown / (now - frames_window_at)
+        frames_shown = 0
+        frames_window_at = now
 
     handle_buttons(now)
 
@@ -640,11 +667,17 @@ def run():
     print("Ready. %d pixels, %d loops: %s" % (geo.n, geo.turns, geo.counts))
 
     while True:
+        # Step on both sides of the poll: serving a request blocks, so this
+        # keeps the strip updating even while a phone is talking to us.
+        step(time.monotonic())
         try:
             server.poll()
         except Exception as err:  # keep the lights on even if a client misbehaves
             print("server error:", err)
-        step(time.monotonic())
+        try:
+            step(time.monotonic())
+        except Exception as err:  # a render bug must not take the tree down
+            print("render error:", err)
 
 
 if __name__ == "__main__":

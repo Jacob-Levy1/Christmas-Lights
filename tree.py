@@ -38,6 +38,12 @@ DEFAULTS = {
     # --- tree shape -----------------------------------------------------
     "turns": 12,  # how many times the strip goes around the tree
     "top_ratio": 0.18,  # top circumference as a fraction of the bottom
+    # Pixels at the start of the strip that are not on the tree at all --
+    # the lead-in from the controller.  They are always left dark.
+    "start_offset": 0,
+    # Manual pixel count per loop.  Empty means work them out from the cone
+    # shape above; a hand-wrapped tree rarely matches the maths exactly.
+    "loop_counts": [],
     "start_at_bottom": True,  # does pixel 0 sit at the bottom of the tree?
     "clockwise": True,  # direction the strip winds, seen from the front
     # Per-loop front calibration.  Each entry is 0..1: the fraction of the
@@ -86,7 +92,7 @@ RESTART_KEYS = (
     "hostname",
 )
 
-_INT_KEYS = ("num_pixels", "turns", "fps", "cols", "idle_cycle_secs")
+_INT_KEYS = ("num_pixels", "turns", "fps", "cols", "idle_cycle_secs", "start_offset")
 _FLOAT_KEYS = (
     "top_ratio",
     "brightness",
@@ -102,6 +108,7 @@ BUTTON_KEYS = ("buttons_enabled",) + tuple("button_" + name for name in
 
 _LIMITS = {
     "num_pixels": (1, 1200),
+    "start_offset": (0, 1199),
     "turns": (1, 64),
     "fps": (1, 60),
     "cols": (4, 48),
@@ -170,6 +177,8 @@ def sanitise(raw):
                 out[key] = [float(x) % 1.0 for x in value]
             elif key == "calibrated":
                 out[key] = [bool(x) for x in value]
+            elif key == "loop_counts":
+                out[key] = [max(1, int(x)) for x in value]
             elif key in ("snake_wrap",):
                 out[key] = "ring" if str(value) == "ring" else "spiral"
             elif key == "wifi_mode":
@@ -303,25 +312,40 @@ class Geometry:
 
     def rebuild(self, cfg):
         num = max(1, int(cfg["num_pixels"]))
-        turns = max(1, min(int(cfg["turns"]), num))
+        offset = min(max(0, int(cfg.get("start_offset", 0))), num - 1)
+        usable = num - offset
+        turns = max(1, min(int(cfg["turns"]), usable))
         top_ratio = float(cfg["top_ratio"])
         rotation = float(cfg.get("rotation", 0.0))
         clockwise = bool(cfg.get("clockwise", True))
         bottom_first = bool(cfg.get("start_at_bottom", True))
 
         self.n = num
+        self.offset = offset
+        self.usable = usable
         self.turns = turns
         self.top_ratio = top_ratio
 
-        # Loop lengths, bottom (longest) first ...
-        counts = split_loops(num, turns, top_ratio)
-        # ... then put them in strip order.
-        if not bottom_first:
-            counts.reverse()
+        # A manual set of loop lengths wins, as long as it still describes
+        # this strip; otherwise work them out from the cone shape.
+        manual = cfg.get("loop_counts") or []
+        if len(manual) == turns and sum(manual) == usable and all(c >= 1 for c in manual):
+            counts = [int(c) for c in manual]
+            self.auto_counts = False
+        else:
+            # Loop lengths, bottom (longest) first ...
+            counts = split_loops(usable, turns, top_ratio)
+            # ... then put them in strip order.
+            if not bottom_first:
+                counts.reverse()
+            self.auto_counts = True
+            if manual:
+                # Stale override (the rotation count or strip length moved).
+                cfg["loop_counts"] = []
         self.counts = counts
 
         starts = []
-        at = 0
+        at = offset
         for count in counts:
             starts.append(at)
             at += count
@@ -346,7 +370,7 @@ class Geometry:
         self.loop_of = bytearray(num)
         self.height_of = [0.0] * turns
 
-        index = 0
+        index = offset
         for k in range(turns):
             count = counts[k]
             offset = self.front_index[k]
@@ -368,7 +392,7 @@ class Geometry:
 
         # Coarse grid cell for each pixel, for sprite-style renderers.
         self.grid_of = [0] * num
-        for i in range(num):
+        for i in range(offset, num):
             col = (self.u[i] * GRID_W) >> 8
             row = (self.v[i] * GRID_H) >> 8
             if row >= GRID_H:
@@ -396,7 +420,7 @@ class Geometry:
 
         grid = [[[] for _ in range(cols)] for _ in range(turns)]
         in_row = [[] for _ in range(turns)]
-        for i in range(self.n):
+        for i in range(self.offset, self.n):
             row = row_of_loop[self.loop_of[i]]
             col = int(self.u[i] * cols / 256.0 + 0.5) % cols
             grid[row][col].append(i)
@@ -448,6 +472,9 @@ class Geometry:
             v_hex = "".join("%02x" % b for b in self.v)
         return {
             "n": self.n,
+            "offset": self.offset,
+            "usable": self.usable,
+            "auto_counts": self.auto_counts,
             "turns": self.turns,
             "top_ratio": self.top_ratio,
             "counts": self.counts,

@@ -9,6 +9,82 @@ function debounce(fn, wait) {
   };
 }
 
+/* Sliders in Admin do not apply as you drag them.  Nudging one by accident
+ * should not quietly rebuild the tree's geometry, so the new value is shown
+ * with an OK / Cancel bar and only applied when you say so. */
+function deferredSlider(id, format, buildPatch, onApplied) {
+  const input = document.getElementById(id);
+  const label = input.closest('label') || input;
+
+  const bar = document.createElement('div');
+  bar.className = 'confirm';
+  bar.hidden = true;
+  const text = document.createElement('span');
+  const ok = document.createElement('button');
+  ok.className = 'ok';
+  ok.textContent = 'OK';
+  const cancel = document.createElement('button');
+  cancel.textContent = 'Cancel';
+  bar.append(text, ok, cancel);
+  label.after(bar);
+
+  const control = {
+    applied: Number(input.value),
+    pending: false,
+    set(value) {
+      control.applied = Number(value);
+      // A background refresh must not wipe a value you are still deciding
+      // about: leave the slider and the OK bar alone while one is waiting.
+      if (control.pending) return;
+      input.value = value;
+      control.show(Number(value));
+      bar.hidden = true;
+    },
+    show(value) {
+      const out = input.parentElement.querySelector('output');
+      if (out) out.textContent = format(value);
+    },
+  };
+
+  input.addEventListener('input', () => {
+    const value = Number(input.value);
+    control.show(value);
+    if (value === control.applied) {
+      control.pending = false;
+      bar.hidden = true;
+      return;
+    }
+    control.pending = true;
+    text.textContent = 'Apply ' + format(value) + '?';
+    bar.hidden = false;
+  });
+
+  ok.addEventListener('click', async () => {
+    const value = Number(input.value);
+    control.pending = false;
+    bar.hidden = true;
+    try {
+      await App.pushConfig(buildPatch(value));
+      control.applied = value;
+      if (onApplied) onApplied(value);
+      App.toast('applied');
+    } catch (err) {
+      App.toast('could not apply that', true);
+      input.value = control.applied;
+      control.show(control.applied);
+    }
+  });
+
+  cancel.addEventListener('click', () => {
+    control.pending = false;
+    input.value = control.applied;
+    control.show(control.applied);
+    bar.hidden = true;
+  });
+
+  return control;
+}
+
 const Idle = {
   ready: false,
 
@@ -115,23 +191,57 @@ const Admin = {
         .catch(() => App.toast('could not apply that', true));
     }, 260);
 
-    // --- tree shape -------------------------------------------------
-    const turns = document.getElementById('turns');
-    turns.addEventListener('input', () => {
-      document.getElementById('turnsOut').textContent = turns.value;
-      shape({ turns: Number(turns.value) });
+    // --- tree shape (all confirmed before they apply) ----------------
+    this.sliders = {
+      turns: deferredSlider('turns', (v) => v + ' rotations',
+        (v) => ({ turns: v }), () => this.syncFromState()),
+      topRatio: deferredSlider('topRatio', (v) => v + '%',
+        (v) => ({ top_ratio: v / 100 }), () => this.syncFromState()),
+      rotation: deferredSlider('rotation', (v) => v + '%',
+        (v) => ({ rotation: v / 100 })),
+      brightness: deferredSlider('brightness', (v) => v + '%',
+        (v) => ({ brightness: v / 100 })),
+      fps: deferredSlider('fps', (v) => v + ' fps', (v) => ({ fps: v })),
+      cols: deferredSlider('cols', (v) => v + ' wide',
+        (v) => ({ cols: v }), () => this.syncFromState()),
+    };
+
+    // --- per-loop pixel counts --------------------------------------
+    const moveLoopPixel = async (delta) => {
+      const counts = Array.from(App.geo.counts);
+      const here = this.loop;
+      const neighbour = here + 1 < counts.length ? here + 1 : here - 1;
+      if (neighbour < 0) { App.toast('only one loop to share between', true); return; }
+      if (counts[here] + delta < 1 || counts[neighbour] - delta < 1) {
+        App.toast('a loop cannot go below one pixel', true);
+        return;
+      }
+      counts[here] += delta;
+      counts[neighbour] -= delta;
+      try {
+        await App.pushConfig({ loop_counts: counts });
+        this.syncFromState();
+      } catch (err) {
+        App.toast('could not change the loop lengths', true);
+      }
+    };
+    document.getElementById('loopMinus').addEventListener('click', () => moveLoopPixel(-1));
+    document.getElementById('loopPlus').addEventListener('click', () => moveLoopPixel(1));
+    document.getElementById('loopAuto').addEventListener('click', async () => {
+      await App.pushConfig({ loop_counts: [] });
+      this.syncFromState();
+      App.toast('loop lengths back to automatic');
     });
 
-    const topRatio = document.getElementById('topRatio');
-    topRatio.addEventListener('input', () => {
-      document.getElementById('topRatioOut').textContent = topRatio.value + '%';
-      shape({ top_ratio: Number(topRatio.value) / 100 });
-    });
-
-    const rotation = document.getElementById('rotation');
-    rotation.addEventListener('input', () => {
-      document.getElementById('rotationOut').textContent = rotation.value + '%';
-      shape({ rotation: Number(rotation.value) / 100 });
+    const startOffset = document.getElementById('startOffset');
+    startOffset.addEventListener('change', async () => {
+      try {
+        await App.pushConfig({ start_offset: Number(startOffset.value) });
+        this.syncFromState();
+        App.toast('lead-in set');
+      } catch (err) {
+        App.toast('could not set the lead-in', true);
+      }
     });
 
     document.getElementById('startAtBottom').addEventListener('change', (event) => {
@@ -196,20 +306,7 @@ const Admin = {
       });
     });
 
-    // --- hardware / games / wifi ------------------------------------
-    const show = (id, out, format) => {
-      const input = document.getElementById(id);
-      input.addEventListener('input', () => {
-        document.getElementById(out).textContent = format(Number(input.value));
-      });
-      return input;
-    };
-    show('brightness', 'brightnessOut', (v) => v + '%');
-    show('fps', 'fpsOut', (v) => v + ' fps');
-
-    const cols = show('cols', 'colsOut', (v) => v + ' wide');
-    cols.addEventListener('change', () => shape({ cols: Number(cols.value) }));
-
+    // --- games / wifi ------------------------------------------------
     document.getElementById('snakeWrap').addEventListener('click', (event) => {
       const button = event.target.closest('button[data-wrap]');
       if (!button) return;
@@ -246,9 +343,6 @@ const Admin = {
       num_pixels: Number(document.getElementById('numPixels').value),
       pin: document.getElementById('pin').value.trim() || 'GP0',
       order: document.getElementById('order').value,
-      brightness: Number(document.getElementById('brightness').value) / 100,
-      fps: Number(document.getElementById('fps').value),
-      cols: Number(document.getElementById('cols').value),
       wifi_mode: wifiMode,
       ap_ssid: document.getElementById('apSsid').value,
       ap_password: document.getElementById('apPassword').value,
@@ -279,12 +373,15 @@ const Admin = {
     if (!state) return;
     const cfg = state.config;
 
-    set('turns', App.geo.turns, 'turnsOut', App.geo.turns);
-    set('topRatio', Math.round(cfg.top_ratio * 100), 'topRatioOut', Math.round(cfg.top_ratio * 100) + '%');
-    set('rotation', Math.round(cfg.rotation * 100), 'rotationOut', Math.round(cfg.rotation * 100) + '%');
-    set('brightness', Math.round(cfg.brightness * 100), 'brightnessOut', Math.round(cfg.brightness * 100) + '%');
-    set('fps', cfg.fps, 'fpsOut', cfg.fps + ' fps');
-    set('cols', cfg.cols, 'colsOut', cfg.cols + ' wide');
+    if (this.sliders) {
+      this.sliders.turns.set(App.geo.turns);
+      this.sliders.topRatio.set(Math.round(cfg.top_ratio * 100));
+      this.sliders.rotation.set(Math.round(cfg.rotation * 100));
+      this.sliders.brightness.set(Math.round(cfg.brightness * 100));
+      this.sliders.fps.set(cfg.fps);
+      this.sliders.cols.set(cfg.cols);
+    }
+    document.getElementById('startOffset').value = cfg.start_offset || 0;
 
     document.getElementById('startAtBottom').checked = !!cfg.start_at_bottom;
     document.getElementById('clockwise').checked = !!cfg.clockwise;
@@ -339,9 +436,21 @@ const Admin = {
     document.getElementById('loopMap').innerHTML = order
       .map((loop) => {
         const height = Math.max(4, Math.round((geo.counts[loop] / biggest) * 100));
-        return `<span style="height:${height}%" title="loop ${loop + 1}: ${geo.counts[loop]} pixels"></span>`;
+        const here = loop === this.loop ? ' class="at"' : '';
+        return `<span${here} data-loop="${loop}" style="height:${height}%"` +
+          ` title="loop ${loop + 1}: ${geo.counts[loop]} pixels"></span>`;
       })
       .join('');
+    document.querySelectorAll('#loopMap span').forEach((bar) => {
+      bar.addEventListener('click', () => this.gotoLoop(Number(bar.dataset.loop)));
+    });
+
+    const count = geo.counts[this.loop];
+    document.getElementById('loopTuneLabel').textContent =
+      `Loop ${this.loop + 1} of ${geo.turns} — ${count} pixel${count === 1 ? '' : 's'}`;
+    document.getElementById('loopTuneMode').textContent = geo.auto_counts
+      ? 'lengths from the cone shape'
+      : 'lengths set by hand';
   },
 
   renderCalibration() {
@@ -373,6 +482,7 @@ const Admin = {
     const geo = App.geo;
     this.loop = ((index % geo.turns) + geo.turns) % geo.turns;
     this.renderCalibration();
+    this.renderLoopMap();
     if (App.activity) App.stopActivity(false);
     App.live = false;
     App.post('/api/test', {
@@ -384,8 +494,12 @@ const Admin = {
 
   renderInfo(state) {
     const smallest = Math.min(...App.geo.counts);
+    const offset = App.geo.offset || 0;
     const parts = [
-      state.config.num_pixels + ' pixels in ' + App.geo.turns + ' loops (' + App.geo.counts.join(', ') + ')',
+      state.config.num_pixels + ' pixels'
+        + (offset ? ' (' + offset + ' lead-in, ' + App.geo.usable + ' on the tree)' : '')
+        + ' in ' + App.geo.turns + ' loops (' + App.geo.counts.join(', ') + ')',
+      'lights updating at ' + (state.fps_actual || 0) + ' fps',
       state.config.cols > smallest
         ? 'the smallest loop has ' + smallest + ' pixels, so the top of the game grid ('
           + state.config.cols + ' columns) shares pixels between columns'

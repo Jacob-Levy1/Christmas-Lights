@@ -52,6 +52,22 @@ pixels out between those loops, giving the lower loops more pixels than the
 higher ones, because the tree is a cone — **Top width** sets how much
 narrower the top is. The little bar chart shows the resulting loop lengths.
 
+Admin's sliders do not apply as you drag them. Changing one shows the new
+value with an **OK / Cancel** bar, so knocking a slider by accident cannot
+quietly rebuild the geometry. (The sliders on the Patterns tab *are* live —
+speed and brightness are meant to be felt as you move them, and nothing
+there is destructive.)
+
+Two more controls for a tree the maths does not quite describe:
+
+* **Lead-in pixels** — how many pixels sit between the controller and the
+  first loop. They are kept dark and left out of the loops entirely.
+* **± pixel** — tap a bar in the chart to pick a loop, then move pixels
+  between it and the next one up until the lengths match what you actually
+  wrapped. The strip length never changes, so the total always adds up.
+  **Auto** goes back to deriving them from the cone shape. Changing the
+  rotation count drops a manual set, since it can no longer be mapped.
+
 ### Centring each loop on the front
 
 The strip is a spiral, so each loop starts at a different angle. Without
@@ -224,6 +240,15 @@ the idle show takes back over.
   for these games over a local hotspot. The idle patterns render on the
   board at the frame rate set in Admin (30 fps by default); `Fireplace` is
   the most expensive, so drop the rate if you add a much longer strip.
+  Admin reports the frame rate the strip is *actually* getting, which is the
+  quickest way to tell whether the lights are being driven properly.
+* **The web page competes with the lights.** The board's HTTP server is
+  synchronous: nothing is rendered while a request is being answered. So the
+  page mirrors the tree gently (about twice a second, and not at all while
+  the page is in the background), button presses ride back on the reply to a
+  frame rather than costing a request of their own, and the socket timeout
+  is cut to 0.25 s so a phone that stalls mid-request cannot freeze the
+  strip for a whole second.
 * **Columns vs pixels.** The game grid is 16 columns wide by default, but
   the top loop of a 300-pixel, 12-rotation tree only has 9 pixels. Cells
   with no pixel of their own borrow the nearest one in the same loop, so

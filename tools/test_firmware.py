@@ -255,7 +255,8 @@ def main():
     # --- live frames ---
     body = bytes([9, 20, 30] * 300)
     response = call("POST", "/api/frame", body)
-    check("frame accepted", response.status[0] == 204, response.status)
+    check("frame accepted", response.status[0] == 200, response.status)
+    check("frame reply carries the button queue", "presses" in response.data, response.data)
     check("frame reached the strip", firmware.pixels.buffer[0] == (9, 20, 30), firmware.pixels.buffer[0])
     check("mode switched to live", firmware.mode == "live", firmware.mode)
 
@@ -487,6 +488,14 @@ def main():
     queued = call("GET", "/api/input").data["presses"]
     check("presses queued for the web app", queued == ["left", "select"], queued)
     check("queue drains on read", call("GET", "/api/input").data["presses"] == [])
+
+    # ... and the same queue rides back on a frame POST, so a phone that is
+    # driving needs no extra request to read its controller.
+    tap("right", 7020.0)
+    reply = call("POST", "/api/frame", bytes([2, 2, 2] * firmware.geo.n)).data
+    check("frame reply returns the presses", reply["presses"] == ["right"], reply)
+    check("frame reply drains the queue",
+          call("POST", "/api/frame", bytes([2, 2, 2] * firmware.geo.n)).data["presses"] == [])
 
     firmware.mode = "live"
     firmware.show.set_pattern("rainbow_spiral", 0.0)

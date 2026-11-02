@@ -82,6 +82,7 @@ class Tree:
                 "labels": ["up", "down", "left", "right", "select"],
             },
             "onboard_game": False,
+            "fps_actual": float(self.cfg["fps"]),
         }
 
     def blank(self):
@@ -199,7 +200,9 @@ class Handler(BaseHTTPRequestHandler):
                     TREE.frame[i] = (0, 0, 0)
                 TREE.mode = "live"
                 TREE.last_frame_at = time.monotonic()
-            return self.reply(204)
+                presses = list(TREE.presses)
+                TREE.presses = []
+            return self.reply_json({"presses": presses})
 
         if path == "/api/config":
             incoming = self.read_json()

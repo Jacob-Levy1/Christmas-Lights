@@ -133,6 +133,18 @@
   <label class="slider">Top width <output id="topRatioOut"></output>
     <input type="range" id="topRatio" min="2" max="100" value="18"></label>
   <div class="loopmap" id="loopMap"></div>
+  <div class="looptune">
+    <span id="loopTuneLabel">Loop 1</span>
+    <span id="loopTuneMode"></span>
+  </div>
+  <div class="row">
+    <button id="loopMinus">− pixel</button>
+    <button id="loopPlus">+ pixel</button>
+    <button id="loopAuto">Auto</button>
+  </div>
+  <div class="hint">Tap a bar to pick a loop, then move pixels between it and the next one up until the lengths match your tree. “Auto” goes back to working them out from the cone shape.</div>
+  <label class="field">Lead-in pixels before the tree starts
+    <input type="number" id="startOffset" min="0" step="1"></label>
   <div class="row">
     <label class="check"><input type="checkbox" id="startAtBottom" checked> Strip starts at the bottom</label>
   </div>

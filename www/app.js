@@ -103,6 +103,9 @@ const App = {
     this.sinA = new Float32Array(n);
     this.cosA = new Float32Array(n);
 
+    // Pixels before the first loop are the lead-in cable, not on the tree.
+    this.offset = geo.offset || 0;
+
     const taper = 1 - geo.top_ratio;
     for (let i = 0; i < n; i++) {
       const a = (u[i] / 256) * Math.PI * 2;
@@ -116,6 +119,7 @@ const App = {
 
     // Back of the tree first, so nearer pixels paint over further ones.
     this.order = Array.from({ length: n }, (_, i) => i)
+      .filter((i) => i >= this.offset)
       .sort((a, b) => this.cosA[a] - this.cosA[b]);
 
     // Which loop each pixel belongs to.
@@ -214,12 +218,22 @@ const App = {
     this.inflight = true;
     this.lastSent = performance.now();
     try {
-      await fetch('/api/frame', {
+      const res = await fetch('/api/frame', {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: this.frame,
       });
       if (!this.live) { this.live = true; this.setStatus(); }
+      // The board hands back any button presses on the same round trip, so
+      // a controller costs us no extra requests while we are driving.
+      if (this.buttonsWired) {
+        try {
+          const data = await res.json();
+          for (const press of data.presses || []) {
+            Games.input(press === 'select' ? 'action' : press);
+          }
+        } catch (err) { /* older board, or no body */ }
+      }
     } catch (err) {
       this.setStatus('lost the tree — reconnecting', 'bad');
     }
@@ -237,9 +251,12 @@ const App = {
     return payload;
   },
 
-  /* Collect presses from the physical buttons and hand them to whatever is
-   * being played, so the buttons work as a controller for the phone's games
-   * as well as for the board's own. */
+  /* Collect presses from the physical buttons.
+   *
+   * Normally this is never needed: while the board is running its own show
+   * it handles its own buttons, and while this page is driving the presses
+   * ride back on the reply to each frame we post.  Kept for other clients
+   * and for debugging. */
   async pollInput() {
     if (this.pollingInput) return;
     this.pollingInput = true;
@@ -253,6 +270,17 @@ const App = {
       /* nothing waiting, or the board is busy */
     }
     this.pollingInput = false;
+  },
+
+  /* Give the tree back to its own idle show. */
+  async releaseTree() {
+    this.live = false;
+    try {
+      await this.post('/api/mode', { mode: 'idle' });
+      await this.refresh();
+    } catch (err) {
+      /* the board will time out back to idle by itself */
+    }
   },
 
   /* Read back the frame the board is showing, for the preview. */
@@ -317,12 +345,11 @@ const App = {
         this.dirty = false;
         this.send();
       }
-      if (this.buttonsWired && now - this.lastInput > 120) {
-        this.lastInput = now;
-        this.pollInput();
-      }
-    } else if (now - this.lastPolled > 220) {
-      // Not driving: mirror whatever the tree is doing by itself.
+    } else if (now - this.lastPolled > PREVIEW_POLL_MS && !document.hidden) {
+      // Not driving: mirror whatever the tree is doing by itself.  The board
+      // serves requests synchronously and cannot update the strip while it
+      // is answering us, so this is deliberately unhurried -- the preview is
+      // a courtesy, the lights are the point.
       this.lastPolled = now;
       this.pollFrame();
     }
@@ -401,6 +428,7 @@ const App = {
       const button = event.target.closest('button[data-tab]');
       if (!button) return;
       const name = button.dataset.tab;
+      const previous = this.tab;
       this.tab = name;
       document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b === button));
       document.querySelectorAll('.tab').forEach((section) => {
@@ -408,6 +436,9 @@ const App = {
       });
       // Leaving a tab that was driving the tree hands control back.
       if (this.activity && this.activity.tab !== name) this.stopActivity();
+      // Admin's test patterns are not activities, so clear them by hand --
+      // otherwise a calibration dot sits on the tree after you walk away.
+      if (previous === 'admin' && name !== 'admin') this.releaseTree();
       if (name === 'idle') Idle.syncFromState();
       if (name === 'admin') Admin.syncFromState();
     });
@@ -452,6 +483,10 @@ const App = {
     this._toast = setTimeout(() => { el.className = 'toast'; }, 2400);
   },
 };
+
+/* How often the page asks the board what it is showing, in milliseconds.
+ * Every request steals time from the strip, so keep this gentle. */
+const PREVIEW_POLL_MS = 400;
 
 function unhex(text) {
   const out = new Uint8Array(text.length / 2);

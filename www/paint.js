@@ -27,12 +27,8 @@ const Paint = {
     this.wireDraw();
     this.wirePhoto();
 
-    // Entering the Draw tab hands the tree straight to your canvas.
-    document.getElementById('tabs').addEventListener('click', (event) => {
-      const button = event.target.closest('button[data-tab]');
-      if (!button) return;
-      if (button.dataset.tab === 'draw') this.startDraw();
-    });
+    // Opening the Draw tab deliberately does *not* take the tree over: an
+    // empty canvas would just switch the lights off.  The first stroke does.
   },
 
   /* ───────────────────── shared sampling ───────────────────── */
@@ -43,7 +39,7 @@ const Paint = {
     const spin = (turn || 0) * Math.PI * 2;
     const back = backLevel === undefined ? 0.22 : backLevel;
 
-    for (let i = 0; i < App.n; i++) {
+    for (let i = App.offset || 0; i < App.n; i++) {
       const angle = App.ang[i] + spin;
       let sx;
       let level = 1;
@@ -136,7 +132,7 @@ const Paint = {
     });
     document.getElementById('paintClear').addEventListener('click', () => {
       this.clearPaint();
-      this.startDraw();
+      if (App.activity && App.activity.name === 'draw') App.stopActivity();
     });
     document.getElementById('drawProjection').addEventListener('click', (event) => {
       const button = event.target.closest('button[data-proj]');
@@ -145,7 +141,6 @@ const Paint = {
       document.querySelectorAll('#drawProjection button').forEach((b) => {
         b.classList.toggle('on', b === button);
       });
-      this.startDraw();
     });
   },
 
