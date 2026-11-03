@@ -105,10 +105,18 @@ function parseLevels(text) {
   return { levels, offset, errors };
 }
 
-/* Sliders in Admin do not apply as you drag them.  Nudging one by accident
- * should not quietly rebuild the tree's geometry, so the new value is shown
- * with an OK / Cancel bar and only applied when you say so. */
-function deferredSlider(id, format, buildPatch, onApplied) {
+/* Admin controls do not apply as you touch them.  Nudging a slider or
+ * typing in a field should not quietly rebuild the tree's geometry, so the
+ * new value is shown with an OK / Cancel bar and applied only when you say
+ * so.  Equally important: a background refresh must never overwrite a value
+ * you are part way through entering, which is what used to make a new pixel
+ * count silently revert before you could save it.
+ *
+ * Works for sliders, number and text boxes, and selects. */
+function deferredControl(id, format, buildPatch, options) {
+  const settings = options || {};
+  const numeric = settings.numeric !== false;
+  const onApplied = settings.onApplied;
   const input = document.getElementById(id);
   const label = input.closest('label') || input;
 
@@ -124,28 +132,32 @@ function deferredSlider(id, format, buildPatch, onApplied) {
   bar.append(text, ok, cancel);
   label.after(bar);
 
+  const read = () => (numeric ? Number(input.value) : String(input.value));
+
   const control = {
-    applied: Number(input.value),
+    applied: read(),
     pending: false,
     set(value) {
-      control.applied = Number(value);
-      // A background refresh must not wipe a value you are still deciding
-      // about: leave the slider and the OK bar alone while one is waiting.
-      if (control.pending) return;
+      control.applied = numeric ? Number(value) : String(value);
+      // A background refresh must not wipe a value you are still entering:
+      // leave the control and the OK bar alone while one is waiting.
+      if (control.pending || document.activeElement === input) return;
       input.value = value;
-      control.show(Number(value));
+      control.show(control.applied);
       bar.hidden = true;
     },
     show(value) {
       const out = input.parentElement.querySelector('output');
       if (out) out.textContent = format(value);
     },
+    /* The current value, pending or not, for a grouped Save button. */
+    value() { return read(); },
   };
 
-  input.addEventListener('input', () => {
-    const value = Number(input.value);
+  const changed = () => {
+    const value = read();
     control.show(value);
-    if (value === control.applied) {
+    if (value === control.applied || (numeric && !Number.isFinite(value))) {
       control.pending = false;
       bar.hidden = true;
       return;
@@ -153,10 +165,12 @@ function deferredSlider(id, format, buildPatch, onApplied) {
     control.pending = true;
     text.textContent = 'Apply ' + format(value) + '?';
     bar.hidden = false;
-  });
+  };
+  input.addEventListener('input', changed);
+  input.addEventListener('change', changed);
 
   ok.addEventListener('click', async () => {
-    const value = Number(input.value);
+    const value = read();
     control.pending = false;
     bar.hidden = true;
     try {
@@ -289,17 +303,29 @@ const Admin = {
 
     // --- tree shape (all confirmed before they apply) ----------------
     this.sliders = {
-      turns: deferredSlider('turns', (v) => v + ' rotations',
-        (v) => ({ turns: v }), () => this.syncFromState()),
-      topRatio: deferredSlider('topRatio', (v) => v + '%',
-        (v) => ({ top_ratio: v / 100 }), () => this.syncFromState()),
-      rotation: deferredSlider('rotation', (v) => v + '%',
+      turns: deferredControl('turns', (v) => v + ' rotations',
+        (v) => ({ turns: v }), { onApplied: () => this.syncFromState() }),
+      topRatio: deferredControl('topRatio', (v) => v + '%',
+        (v) => ({ top_ratio: v / 100 }), { onApplied: () => this.syncFromState() }),
+      rotation: deferredControl('rotation', (v) => v + '%',
         (v) => ({ rotation: v / 100 })),
-      brightness: deferredSlider('brightness', (v) => v + '%',
+      brightness: deferredControl('brightness', (v) => v + '%',
         (v) => ({ brightness: v / 100 })),
-      fps: deferredSlider('fps', (v) => v + ' fps', (v) => ({ fps: v })),
-      cols: deferredSlider('cols', (v) => v + ' wide',
-        (v) => ({ cols: v }), () => this.syncFromState()),
+      fps: deferredControl('fps', (v) => v + ' fps', (v) => ({ fps: v })),
+      cols: deferredControl('cols', (v) => v + ' wide',
+        (v) => ({ cols: v }), { onApplied: () => this.syncFromState() }),
+
+      // Hardware fields get the same treatment.  A new pixel count used to
+      // be silently reverted by the next background refresh before you
+      // could save it -- the whole reason two reels stayed dark.
+      numPixels: deferredControl('numPixels', (v) => v + ' pixels',
+        (v) => ({ num_pixels: v }), { onApplied: () => this.syncFromState() }),
+      startOffset: deferredControl('startOffset', (v) => v + ' lead-in pixels',
+        (v) => ({ start_offset: v }), { onApplied: () => this.syncFromState() }),
+      pin: deferredControl('pin', (v) => 'data pin ' + v,
+        (v) => ({ pin: v.trim() || 'GP0' }), { numeric: false }),
+      order: deferredControl('order', (v) => 'colour order ' + v,
+        (v) => ({ order: v }), { numeric: false }),
     };
 
     // --- per-loop pixel counts --------------------------------------
@@ -368,17 +394,6 @@ const Admin = {
     });
 
     document.getElementById('rawApply').addEventListener('click', () => this.applyRaw());
-
-    const startOffset = document.getElementById('startOffset');
-    startOffset.addEventListener('change', async () => {
-      try {
-        await App.pushConfig({ start_offset: Number(startOffset.value) });
-        this.syncFromState();
-        App.toast('lead-in set');
-      } catch (err) {
-        App.toast('could not set the lead-in', true);
-      }
-    });
 
     document.getElementById('startAtBottom').addEventListener('change', (event) => {
       shape({ start_at_bottom: event.target.checked });
@@ -464,6 +479,11 @@ const Admin = {
       document.getElementById('buttonFields').hidden = !buttonsEnabled.checked;
     });
 
+    ['apSsid', 'apPassword', 'staSsid', 'staPassword', 'hostname'].forEach((id) => {
+      const field = document.getElementById(id);
+      field.addEventListener('input', () => { field.dataset.edited = '1'; });
+    });
+
     document.getElementById('adminSave').addEventListener('click', () => this.save());
     document.getElementById('adminRestart').addEventListener('click', async () => {
       App.toast('restarting — reconnect in a few seconds');
@@ -476,7 +496,9 @@ const Admin = {
   async save() {
     const wifiMode = document.querySelector('#wifiMode button.on').dataset.wifi;
     const patch = {
+      // Whatever is in the boxes now, whether or not its OK bar was pressed.
       num_pixels: Number(document.getElementById('numPixels').value),
+      start_offset: Number(document.getElementById('startOffset').value) || 0,
       pin: document.getElementById('pin').value.trim() || 'GP0',
       order: document.getElementById('order').value,
       wifi_mode: wifiMode,
@@ -494,6 +516,15 @@ const Admin = {
     };
     try {
       const result = await App.pushConfig(patch);
+      ['apSsid', 'apPassword', 'staSsid', 'staPassword', 'hostname'].forEach((id) => {
+        delete document.getElementById(id).dataset.edited;
+      });
+      if (this.sliders) {
+        this.sliders.numPixels.pending = false;
+        this.sliders.startOffset.pending = false;
+        this.sliders.pin.pending = false;
+        this.sliders.order.pending = false;
+      }
       let message = result.persisted ? 'settings saved' : 'applied, but could not write to flash';
       if (result.restart_needed) message += ' — restart the tree to use the new wifi/pin';
       App.toast(message, !result.persisted);
@@ -516,19 +547,26 @@ const Admin = {
       this.sliders.brightness.set(Math.round(cfg.brightness * 100));
       this.sliders.fps.set(cfg.fps);
       this.sliders.cols.set(cfg.cols);
+      this.sliders.numPixels.set(cfg.num_pixels);
+      this.sliders.startOffset.set(cfg.start_offset || 0);
+      this.sliders.pin.set(cfg.pin);
+      this.sliders.order.set(cfg.order);
     }
-    document.getElementById('startOffset').value = cfg.start_offset || 0;
 
     document.getElementById('startAtBottom').checked = !!cfg.start_at_bottom;
     document.getElementById('clockwise').checked = !!cfg.clockwise;
-    document.getElementById('numPixels').value = cfg.num_pixels;
-    document.getElementById('pin').value = cfg.pin;
-    document.getElementById('order').value = cfg.order;
-    document.getElementById('apSsid').value = cfg.ap_ssid;
-    document.getElementById('apPassword').value = cfg.ap_password;
-    document.getElementById('staSsid').value = cfg.sta_ssid;
-    document.getElementById('staPassword').value = cfg.sta_password;
-    document.getElementById('hostname').value = cfg.hostname;
+    // The wifi fields are applied as a group by Save settings, so they are
+    // only refilled when you are not part way through editing them.
+    const fill = (id, value) => {
+      const field = document.getElementById(id);
+      if (document.activeElement === field || field.dataset.edited === '1') return;
+      field.value = value === undefined || value === null ? '' : value;
+    };
+    fill('apSsid', cfg.ap_ssid);
+    fill('apPassword', cfg.ap_password);
+    fill('staSsid', cfg.sta_ssid);
+    fill('staPassword', cfg.sta_password);
+    fill('hostname', cfg.hostname);
     document.getElementById('buttonsEnabled').checked = !!cfg.buttons_enabled;
     document.getElementById('buttonFields').hidden = !cfg.buttons_enabled;
     document.getElementById('buttonUp').value = cfg.button_up || '';
@@ -738,11 +776,16 @@ const Admin = {
   renderInfo(state) {
     const smallest = Math.min(...App.geo.counts);
     const offset = App.geo.offset || 0;
+    const spare = App.n - (App.geo.used === undefined ? App.n : App.geo.used);
     const parts = [
       state.config.num_pixels + ' pixels'
         + (offset ? ' (' + offset + ' lead-in, ' + App.geo.usable + ' on the tree)' : '')
         + ' in ' + App.geo.turns + ' loops (' + App.geo.counts.join(', ') + ')',
-      'lights updating at ' + (state.fps_actual || 0) + ' fps',
+      'lights updating at ' + (state.fps_actual || 0) + ' fps'
+        + (state.fps_actual && state.fps_actual < state.config.fps * 0.75
+          ? ' (asked for ' + state.config.fps + ' — a long strip takes real time to'
+            + ' shift out, so lower the idle frame rate)'
+          : ''),
       state.config.cols > smallest
         ? 'the smallest loop has ' + smallest + ' pixels, so the top of the game grid ('
           + state.config.cols + ' columns) shares pixels between columns'
@@ -752,6 +795,22 @@ const Admin = {
       state.persisted ? 'settings saved to flash' : 'cannot write to flash while the USB drive is mounted',
     ];
     document.getElementById('adminInfo').textContent = parts.join(' · ');
+
+    // If the levels do not reach the end of the strip, say so loudly: after
+    // adding a second reel it is otherwise a mystery why half of it is dark.
+    const warning = document.getElementById('unusedWarning');
+    if (spare > 0) {
+      warning.hidden = false;
+      warning.textContent = spare + ' pixel' + (spare === 1 ? '' : 's')
+        + ' at the end of the strip are not on the tree, so they stay dark.'
+        + (App.geo.auto_counts
+          ? ' Raise the lead-in or the pixel count to match your strip.'
+          : ' The level lengths were set by hand and still add up to '
+            + (App.geo.used - offset) + '. Press “Auto” above, or redo the raw'
+            + ' setup, to spread the whole strip over the tree.');
+    } else {
+      warning.hidden = true;
+    }
   },
 };
 

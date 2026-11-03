@@ -62,6 +62,12 @@ Two more controls for a tree the maths does not quite describe:
 
 * **Lead-in pixels** — how many pixels sit between the controller and the
   first loop. They are kept dark and left out of the loops entirely.
+
+Every field in Admin waits for an **OK** before it applies, including the
+pixel count, and nothing in the background will overwrite a value you are
+part way through entering. If the levels do not reach the end of the strip —
+after adding a second reel to a tree whose level lengths were set by hand,
+say — Admin says how many pixels are sitting dark and what to press.
 * **± pixel** — tap a bar in the chart to pick a level, then move pixels
   between it and the next one up until the lengths match what you actually
   wrapped. **Auto** goes back to deriving them from the cone shape. Changing
@@ -280,9 +286,18 @@ the idle show takes back over.
 
 ## Notes and limits
 
-* **Power.** 300 WS2812s at full white is around 18 A. The default
-  brightness is 45 %, and the games and patterns are mostly dark, but drive
-  the strip from a proper 5 V supply rather than the Pico's USB rail.
+* **Power.** 300 WS2812s at full white is around 18 A, and 600 about 36 A.
+  The default brightness is 45 %, and the games and patterns are mostly
+  dark, but drive the strip from a proper 5 V supply rather than the Pico's
+  USB rail, and inject power at both ends of a long run.
+* **More than one reel.** Chain them end to end — data out of the first into
+  data in of the second — and set the total in **Admin → Number of pixels**
+  (two 300-LED reels is 600). A second reel on its own data pin is not
+  supported; the board drives one strip.
+* **Long strips and frame rate.** A WS2812 takes about 30 µs to clock in, so
+  600 pixels cost roughly 18 ms per frame before anything is rendered. The
+  default 30 fps is near the ceiling at that length. Admin shows the rate
+  the strip is really getting and says when it is short of the setting.
 * **Frame rate.** Frames are posted at about 15 per second, which is plenty
   for these games over a local hotspot. The idle patterns render on the
   board at the frame rate set in Admin (30 fps by default); `Fireplace` is

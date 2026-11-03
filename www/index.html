@@ -215,6 +215,7 @@ lead-in 12            pixels before loop 1
 
   <h2>Hardware</h2>
   <label class="field">Number of pixels <input type="number" id="numPixels" min="1" max="1200"></label>
+  <div class="hint">Two 300-LED reels chained together are 600 here. They must be joined end to end on the one data pin; a second reel on its own pin is not supported.</div>
   <label class="field">Data pin <input type="text" id="pin" placeholder="GP0"></label>
   <label class="field">Colour order
     <select id="order"><option>GRB</option><option>RGB</option><option>GRBW</option><option>RGBW</option></select>
@@ -264,6 +265,7 @@ lead-in 12            pixels before loop 1
     <button id="adminRestart">Restart tree</button>
   </div>
   <div class="hint" id="adminInfo"></div>
+  <div class="warn" id="unusedWarning" hidden></div>
 
 </section>
 

@@ -295,6 +295,26 @@ def main():
     firmware.step(3000.0)
     check("renders at the new length", firmware.pixels.shows > 0)
 
+    # Two 300-LED reels chained together.
+    call("POST", "/api/config", {"num_pixels": 300, "turns": 12, "loop_counts": [], "start_offset": 0})
+    call("POST", "/api/config", {"num_pixels": 600})
+    check("a second reel doubles the strip", firmware.pixels.count == 600 and firmware.geo.n == 600,
+          "%d pixels" % firmware.pixels.count)
+    check("all 600 are spread over the levels",
+          sum(firmware.geo.counts) == 600 and firmware.geo.used == 600,
+          "%d in levels, used to %d" % (sum(firmware.geo.counts), firmware.geo.used))
+    firmware.last_render_at = 0
+    firmware.mode = "idle"
+    firmware.show.set_pattern("solid", 0.0)
+    firmware.step(4100.0)
+    check("the far end of the second reel lights up",
+          sum(firmware.pixels.buffer[599]) > 0, firmware.pixels.buffer[599])
+    body = bytes([3, 4, 5] * 600)
+    call("POST", "/api/frame", body)
+    check("a 600-pixel frame is accepted whole",
+          firmware.pixels.buffer[599] == (3, 4, 5), firmware.pixels.buffer[599])
+    call("POST", "/api/config", {"num_pixels": 300})
+
     state = call("POST", "/api/config", {"ap_ssid": "Tree2"}).data
     check("wifi change asks for a restart", state["restart_needed"] is True)
 
