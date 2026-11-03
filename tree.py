@@ -41,8 +41,11 @@ DEFAULTS = {
     # Pixels at the start of the strip that are not on the tree at all --
     # the lead-in from the controller.  They are always left dark.
     "start_offset": 0,
-    # Manual pixel count per loop.  Empty means work them out from the cone
-    # shape above; a hand-wrapped tree rarely matches the maths exactly.
+    # Manual pixel count per level, bottom of the tree first, so
+    # ``loop_counts[0]`` is the bottom loop whichever end of the strip starts
+    # there.  Empty means work them out from the cone shape above; a
+    # hand-wrapped tree rarely matches the maths exactly.  They may add up to
+    # less than the strip, and the pixels left over at the end stay dark.
     "loop_counts": [],
     "start_at_bottom": True,  # does pixel 0 sit at the bottom of the tree?
     "clockwise": True,  # direction the strip winds, seen from the front
@@ -326,22 +329,29 @@ class Geometry:
         self.turns = turns
         self.top_ratio = top_ratio
 
-        # A manual set of loop lengths wins, as long as it still describes
-        # this strip; otherwise work them out from the cone shape.
+        # A manual set of level lengths wins, as long as it still fits this
+        # strip; otherwise work them out from the cone shape.  Manual lengths
+        # are given bottom level first and may leave pixels spare at the end.
         manual = cfg.get("loop_counts") or []
-        if len(manual) == turns and sum(manual) == usable and all(c >= 1 for c in manual):
-            counts = [int(c) for c in manual]
+        usable_manual = (
+            len(manual) == turns
+            and 0 < sum(manual) <= usable
+            and all(c >= 1 for c in manual)
+        )
+        if usable_manual:
+            counts = [int(c) for c in manual]  # bottom level first
             self.auto_counts = False
         else:
-            # Loop lengths, bottom (longest) first ...
-            counts = split_loops(usable, turns, top_ratio)
-            # ... then put them in strip order.
-            if not bottom_first:
-                counts.reverse()
+            counts = split_loops(usable, turns, top_ratio)  # bottom first too
             self.auto_counts = True
             if manual:
                 # Stale override (the rotation count or strip length moved).
                 cfg["loop_counts"] = []
+
+        # Both paths produce bottom-first lengths; put them in strip order.
+        self.level_counts = list(counts)
+        if not bottom_first:
+            counts = list(reversed(counts))
         self.counts = counts
 
         starts = []
@@ -350,6 +360,9 @@ class Geometry:
             starts.append(at)
             at += count
         self.starts = starts
+        #: One past the last pixel that is on the tree.  Anything from here to
+        #: the end of the strip is spare and stays dark.
+        self.used = at
 
         # Keep calibration meaningful across a change in the loop count.
         front = _resample(cfg.get("front") or [], turns, 0.0)
@@ -392,7 +405,7 @@ class Geometry:
 
         # Coarse grid cell for each pixel, for sprite-style renderers.
         self.grid_of = [0] * num
-        for i in range(offset, num):
+        for i in range(offset, self.used):
             col = (self.u[i] * GRID_W) >> 8
             row = (self.v[i] * GRID_H) >> 8
             if row >= GRID_H:
@@ -420,7 +433,7 @@ class Geometry:
 
         grid = [[[] for _ in range(cols)] for _ in range(turns)]
         in_row = [[] for _ in range(turns)]
-        for i in range(self.offset, self.n):
+        for i in range(self.offset, self.used):
             row = row_of_loop[self.loop_of[i]]
             col = int(self.u[i] * cols / 256.0 + 0.5) % cols
             grid[row][col].append(i)
@@ -474,7 +487,9 @@ class Geometry:
             "n": self.n,
             "offset": self.offset,
             "usable": self.usable,
+            "used": self.used,
             "auto_counts": self.auto_counts,
+            "level_counts": self.level_counts,
             "turns": self.turns,
             "top_ratio": self.top_ratio,
             "counts": self.counts,

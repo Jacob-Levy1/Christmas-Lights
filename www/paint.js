@@ -39,7 +39,8 @@ const Paint = {
     const spin = (turn || 0) * Math.PI * 2;
     const back = backLevel === undefined ? 0.22 : backLevel;
 
-    for (let i = App.offset || 0; i < App.n; i++) {
+    const last = App.used === undefined ? App.n : App.used;
+    for (let i = App.offset || 0; i < last; i++) {
       const angle = App.ang[i] + spin;
       let sx;
       let level = 1;

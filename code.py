@@ -141,9 +141,12 @@ def push(colors):
     """Write a whole frame to the strip and latch it."""
     global _slice_assign, frames_shown
     frames_shown += 1
-    # Pixels before the first loop are the lead-in from the controller and
-    # are not on the tree: keep them dark whatever drew the frame.
+    # Pixels before the first loop are the lead-in from the controller, and
+    # anything past the last loop is spare strip.  Neither is on the tree, so
+    # keep them dark whatever drew the frame.
     for i in range(geo.offset):
+        colors[i] = (0, 0, 0)
+    for i in range(geo.used, geo.n):
         colors[i] = (0, 0, 0)
     if _slice_assign:
         try:

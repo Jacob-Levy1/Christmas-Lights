@@ -62,11 +62,42 @@ Two more controls for a tree the maths does not quite describe:
 
 * **Lead-in pixels** — how many pixels sit between the controller and the
   first loop. They are kept dark and left out of the loops entirely.
-* **± pixel** — tap a bar in the chart to pick a loop, then move pixels
+* **± pixel** — tap a bar in the chart to pick a level, then move pixels
   between it and the next one up until the lengths match what you actually
-  wrapped. The strip length never changes, so the total always adds up.
-  **Auto** goes back to deriving them from the cone shape. Changing the
-  rotation count drops a manual set, since it can no longer be mapped.
+  wrapped. **Auto** goes back to deriving them from the cone shape. Changing
+  the rotation count drops a manual set, since it can no longer be mapped.
+
+### Raw setup
+
+Faster than the sliders if you already know your tree: type the height, then
+the LED count for each level. Level **0 is the bottom**.
+
+```
+0 20l, 1 17l, 2 15l
+```
+
+Several ways of writing it all work:
+
+```
+0 20l, 1 17l, 2 15l     level number then count
+0: 20                   one per line, colon or equals
+1: 17
+20, 17, 15              just the counts, bottom level first
+20 17 15                spaces instead of commas
+lead-in 12              pixels before the first loop
+# anything after a hash is a comment
+```
+
+Levels may be given out of order, and bare counts fill the gaps between
+numbered ones. The box tells you what it would do before it does it — how
+many levels, how many pixels, how many spare — and **Apply** stays disabled
+until it makes sense. Nothing is applied while you type.
+
+**The counts do not have to use the whole strip.** Anything past the last
+level is spare and stays dark, as does the lead-in, so a 300-pixel strip can
+happily describe a 52-pixel tree while you are testing. **Load current**
+fills the box from the live settings, and **Even** divides the strip equally
+between the levels.
 
 ### Centring each loop on the front
 
@@ -186,6 +217,7 @@ These run on the board, so they keep going once you close the page.
 | --- | --- |
 | `code.py` | Boot, wifi, HTTP API, main loop |
 | `tree.py` | Config, the geometry model (per-pixel angle/height tables) and the game grid |
+| `config.json` | Written by the board; `loop_counts` is the level lengths, bottom first |
 | `patterns.py` | The idle animations |
 | `buttons.py` | Debounced reader for the optional GPIO buttons |
 | `snake.py` | Snake played on the board itself, with the buttons |

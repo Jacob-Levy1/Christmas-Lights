@@ -9,6 +9,102 @@ function debounce(fn, wait) {
   };
 }
 
+/* Parse a raw level listing.
+ *
+ * Accepts the shorthand people actually type:
+ *
+ *   0 20l, 1 17l, 2 15l      level number then LED count
+ *   0: 20                    one per line, with a colon or equals
+ *   20, 17, 15               just the counts, bottom level first
+ *   20 17 15                 the same, spaces instead of commas
+ *   level 0 20               spelled out
+ *   lead-in 12               pixels before the first loop
+ *   # anything after a hash is a comment
+ *
+ * Levels are numbered from 0 at the bottom of the tree.  Returns the counts
+ * bottom level first, plus any lead-in, plus anything it could not read.
+ */
+function parseLevels(text) {
+  const errors = [];
+  const indexed = new Map();
+  const bare = [];
+  let offset = null;
+  let sawIndexed = false;
+
+  const entries = String(text || '')
+    .replace(/#[^\n]*/g, '')
+    .split(/[\n,;]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length);
+
+  const UNIT = /(?:leds?|lights?|pixels?|px|l)\b/gi;
+
+  for (const entry of entries) {
+    // lead-in 12 / offset: 12 / skip 12
+    let m = entry.match(/^(?:lead[-\s]?in|lead|offset|skip|start)\s*[:=]?\s*(\d+)/i);
+    if (m) {
+      if (offset !== null) errors.push('the lead-in is given more than once');
+      offset = Number(m[1]);
+      continue;
+    }
+
+    // 0: 20   0 = 20   level 0: 20
+    m = entry.match(/^(?:level|lvl|loop)?\s*(\d+)\s*[:=]\s*(\d+)\s*(?:leds?|lights?|pixels?|px|l)?\s*$/i);
+    // level 0 20   lvl 0 20l
+    if (!m) m = entry.match(/^(?:level|lvl|loop)\s*(\d+)\s+(\d+)\s*(?:leds?|lights?|pixels?|px|l)?\s*$/i);
+    // 0 20l  -- the unit on the second number is what marks it as the count
+    if (!m) m = entry.match(/^(\d+)\s+(\d+)\s*(?:leds?|lights?|pixels?|px|l)\s*$/i);
+    if (m) {
+      const index = Number(m[1]);
+      sawIndexed = true;
+      if (indexed.has(index)) errors.push('level ' + index + ' is given more than once');
+      indexed.set(index, Number(m[2]));
+      continue;
+    }
+
+    // otherwise: plain counts, in order
+    const cleaned = entry.replace(UNIT, ' ').trim();
+    if (!/^[\d\s]+$/.test(cleaned)) {
+      errors.push('could not read "' + entry + '"');
+      continue;
+    }
+    for (const n of cleaned.match(/\d+/g)) bare.push(Number(n));
+  }
+
+  let levels;
+  if (sawIndexed) {
+    const highest = Math.max(...indexed.keys());
+    const size = Math.max(highest + 1, indexed.size + bare.length);
+    levels = new Array(size).fill(null);
+    for (const [index, count] of indexed) {
+      if (index < size) levels[index] = count;
+    }
+    let next = 0;
+    for (const count of bare) {
+      while (next < size && levels[next] !== null) next += 1;
+      if (next < size) levels[next] = count;
+    }
+    const missing = [];
+    levels.forEach((count, index) => {
+      if (count === null) missing.push(index);
+    });
+    for (const index of missing) errors.push('nothing given for level ' + index);
+    levels = levels.map((c) => (c === null ? 0 : c));
+    var reported = missing;
+  } else {
+    levels = bare;
+  }
+
+  const alreadyReported = typeof reported === 'undefined' ? [] : reported;
+  levels.forEach((count, index) => {
+    if (count < 1 && alreadyReported.indexOf(index) === -1) {
+      errors.push('level ' + index + ' needs at least one pixel');
+    }
+  });
+
+  return { levels, offset, errors };
+}
+
 /* Sliders in Admin do not apply as you drag them.  Nudging one by accident
  * should not quietly rebuild the tree's geometry, so the new value is shown
  * with an OK / Cancel bar and only applied when you say so. */
@@ -208,12 +304,14 @@ const Admin = {
 
     // --- per-loop pixel counts --------------------------------------
     const moveLoopPixel = async (delta) => {
-      const counts = Array.from(App.geo.counts);
-      const here = this.loop;
+      // Level counts run bottom first, which is not the same as strip order
+      // when the strip starts at the top, so work in levels throughout.
+      const counts = Array.from(App.geo.level_counts || App.geo.counts);
+      const here = this.levelOf(this.loop);
       const neighbour = here + 1 < counts.length ? here + 1 : here - 1;
-      if (neighbour < 0) { App.toast('only one loop to share between', true); return; }
+      if (neighbour < 0) { App.toast('only one level to share between', true); return; }
       if (counts[here] + delta < 1 || counts[neighbour] - delta < 1) {
-        App.toast('a loop cannot go below one pixel', true);
+        App.toast('a level cannot go below one pixel', true);
         return;
       }
       counts[here] += delta;
@@ -222,7 +320,7 @@ const Admin = {
         await App.pushConfig({ loop_counts: counts });
         this.syncFromState();
       } catch (err) {
-        App.toast('could not change the loop lengths', true);
+        App.toast('could not change the level lengths', true);
       }
     };
     document.getElementById('loopMinus').addEventListener('click', () => moveLoopPixel(-1));
@@ -232,6 +330,44 @@ const Admin = {
       this.syncFromState();
       App.toast('loop lengths back to automatic');
     });
+
+    // --- raw setup ---------------------------------------------------
+    const rawText = document.getElementById('rawText');
+    const rawLevels = document.getElementById('rawLevels');
+    rawText.addEventListener('input', () => this.checkRaw());
+    rawLevels.addEventListener('input', () => {
+      const wanted = Number(rawLevels.value);
+      if (!(wanted >= 1)) return;
+      // Resize whatever is in the box to that many levels, so you can type
+      // the height first and then fill the levels in, without applying
+      // anything until you press Apply.
+      const current = parseLevels(rawText.value).levels.filter((c) => c > 0);
+      const levels = [];
+      for (let k = 0; k < wanted; k++) {
+        levels.push(current[k] !== undefined ? current[k]
+          : current.length ? current[current.length - 1] : 1);
+      }
+      rawText.value = this.formatLevels(levels);
+      this.checkRaw();
+    });
+
+    document.getElementById('rawLoad').addEventListener('click', () => {
+      this.loadRaw();
+      App.toast('loaded what the tree is set to now');
+    });
+
+    document.getElementById('rawEven').addEventListener('click', () => {
+      const wanted = Number(rawLevels.value) || App.geo.turns;
+      const usable = App.n - (App.geo.offset || 0);
+      const each = Math.floor(usable / wanted);
+      const levels = new Array(wanted).fill(each);
+      let spare = usable - each * wanted;
+      for (let k = 0; spare > 0; k++, spare--) levels[k] += 1;
+      rawText.value = this.formatLevels(levels);
+      this.checkRaw();
+    });
+
+    document.getElementById('rawApply').addEventListener('click', () => this.applyRaw());
 
     const startOffset = document.getElementById('startOffset');
     startOffset.addEventListener('change', async () => {
@@ -426,6 +562,112 @@ const Admin = {
     this.renderLoopMap();
     this.renderCalibration();
     this.renderInfo(state);
+
+    // Only refill the raw box when it is empty or already matches, so a
+    // background refresh never eats what you are part way through typing.
+    const rawText = document.getElementById('rawText');
+    if (document.activeElement !== rawText) {
+      const live = this.formatLevels(App.geo.level_counts || App.geo.counts);
+      const shown = parseLevels(rawText.value).levels.join(',');
+      if (!rawText.value.trim() || shown === (App.geo.level_counts || []).join(',')) {
+        this.loadRaw();
+      } else if (shown !== live) {
+        this.checkRaw();
+      }
+    }
+  },
+
+  /* Which level (0 = bottom of the tree) a strip loop sits at. */
+  levelOf(loop) {
+    const heights = App.geo.heights;
+    return Array.from({ length: heights.length }, (_, k) => k)
+      .sort((a, b) => heights[a] - heights[b])
+      .indexOf(loop);
+  },
+
+  /* Write a list of level counts out in the form the box accepts. */
+  formatLevels(levels) {
+    return levels.map((count, index) => index + ': ' + count).join('\n');
+  },
+
+  /* Fill the box from what the tree is actually set to. */
+  loadRaw() {
+    const levels = App.geo.level_counts || App.geo.counts;
+    const offset = App.geo.offset || 0;
+    const lines = [];
+    if (offset) lines.push('lead-in ' + offset);
+    lines.push(this.formatLevels(levels));
+    document.getElementById('rawText').value = lines.join('\n');
+    document.getElementById('rawLevels').value = levels.length;
+    this.checkRaw();
+  },
+
+  /* Read the box and say what it would do, without doing it. */
+  checkRaw() {
+    const status = document.getElementById('rawStatus');
+    const text = document.getElementById('rawText').value;
+    const parsed = parseLevels(text);
+    const offset = parsed.offset === null ? (App.geo.offset || 0) : parsed.offset;
+    const lines = [];
+    let ok = true;
+
+    if (parsed.errors.length) {
+      ok = false;
+      lines.push(...parsed.errors);
+    }
+    if (!parsed.levels.length) {
+      ok = false;
+      if (!parsed.errors.length) lines.push('nothing to apply yet');
+    } else {
+      if (parsed.levels.length > 64) {
+        ok = false;
+        lines.push('64 levels is the most the board will take');
+      }
+      const total = parsed.levels.reduce((a, b) => a + b, 0);
+      const needed = total + offset;
+      if (needed > App.n) {
+        ok = false;
+        lines.push(`that needs ${needed} pixels but the strip has ${App.n}`);
+      } else {
+        const spare = App.n - needed;
+        lines.push(`${parsed.levels.length} levels, ${total} pixels`
+          + (offset ? `, ${offset} lead-in` : '')
+          + (spare ? `, ${spare} spare at the end (left dark)` : ', the whole strip'));
+      }
+    }
+
+    // Keep the height field in step with what is actually in the box.
+    const levelsField = document.getElementById('rawLevels');
+    if (parsed.levels.length && document.activeElement !== levelsField) {
+      levelsField.value = parsed.levels.length;
+    }
+
+    status.textContent = lines.join('\n');
+    status.className = 'rawstatus ' + (ok ? 'good' : 'bad');
+    document.getElementById('rawApply').disabled = !ok;
+    return ok ? { levels: parsed.levels, offset } : null;
+  },
+
+  async applyRaw() {
+    const parsed = this.checkRaw();
+    if (!parsed) { App.toast('fix the raw setup first', true); return; }
+    try {
+      await App.pushConfig({
+        turns: parsed.levels.length,
+        loop_counts: parsed.levels,
+        start_offset: parsed.offset,
+      });
+      this.syncFromState();
+      const geo = App.geo;
+      const applied = (geo.level_counts || []).join(',');
+      if (applied !== parsed.levels.join(',')) {
+        App.toast('the board did not take those lengths — check the total', true);
+      } else {
+        App.toast(geo.turns + ' levels applied');
+      }
+    } catch (err) {
+      App.toast('could not apply the raw setup', true);
+    }
   },
 
   renderLoopMap() {
@@ -446,8 +688,9 @@ const Admin = {
     });
 
     const count = geo.counts[this.loop];
+    const level = this.levelOf(this.loop);
     document.getElementById('loopTuneLabel').textContent =
-      `Loop ${this.loop + 1} of ${geo.turns} — ${count} pixel${count === 1 ? '' : 's'}`;
+      `Level ${level} of ${geo.turns - 1} — ${count} pixel${count === 1 ? '' : 's'}`;
     document.getElementById('loopTuneMode').textContent = geo.auto_counts
       ? 'lengths from the cone shape'
       : 'lengths set by hand';

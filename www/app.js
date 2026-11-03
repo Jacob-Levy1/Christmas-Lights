@@ -103,8 +103,10 @@ const App = {
     this.sinA = new Float32Array(n);
     this.cosA = new Float32Array(n);
 
-    // Pixels before the first loop are the lead-in cable, not on the tree.
+    // Pixels before the first loop are the lead-in cable, and anything past
+    // `used` is spare strip.  Neither is on the tree.
     this.offset = geo.offset || 0;
+    this.used = geo.used === undefined ? n : geo.used;
 
     const taper = 1 - geo.top_ratio;
     for (let i = 0; i < n; i++) {
@@ -119,7 +121,7 @@ const App = {
 
     // Back of the tree first, so nearer pixels paint over further ones.
     this.order = Array.from({ length: n }, (_, i) => i)
-      .filter((i) => i >= this.offset)
+      .filter((i) => i >= this.offset && i < this.used)
       .sort((a, b) => this.cosA[a] - this.cosA[b]);
 
     // Which loop each pixel belongs to.

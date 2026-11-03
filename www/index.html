@@ -154,6 +154,27 @@
   <label class="slider">Spin whole tree <output id="rotationOut"></output>
     <input type="range" id="rotation" min="0" max="100" value="0"></label>
 
+  <h2>Raw setup</h2>
+  <div class="hint">Type the tree out instead of nudging sliders. Level&nbsp;0 is the bottom. Counts can add up to less than the strip — whatever is left over at the end stays dark.</div>
+  <label class="field">How many levels <input type="number" id="rawLevels" min="1" max="64" step="1"></label>
+  <textarea id="rawText" class="raw" spellcheck="false" autocapitalize="off" autocomplete="off" rows="8"></textarea>
+  <div class="rawstatus" id="rawStatus"></div>
+  <div class="row">
+    <button id="rawApply" class="primary">Apply</button>
+    <button id="rawLoad">Load current</button>
+    <button id="rawEven">Even</button>
+  </div>
+  <details class="rawhelp">
+    <summary>Accepted ways of writing it</summary>
+    <pre>0 20l, 1 17l, 2 15l   level then count
+0: 20                 one per line
+1: 17
+20, 17, 15            counts only, bottom first
+20 17 15              spaces work too
+lead-in 12            pixels before loop 1
+# a hash starts a comment</pre>
+  </details>
+
   <h2>Centre each loop on the front</h2>
   <div class="hint">One pixel lights up. Slide until it is pointing straight at the front of the tree, then save it. Do a few loops and let the rest be filled in, or do them all.</div>
   <div class="caldots" id="calDots"></div>

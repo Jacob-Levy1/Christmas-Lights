@@ -363,6 +363,60 @@ def main():
     check("auto-cycle moves to the next pattern", firmware.show.name != first,
           first + " -> " + firmware.show.name)
 
+    # -------------------------------------------------- raw level setup ---
+    state = call("POST", "/api/config", {"turns": 3, "loop_counts": [20, 17, 15]}).data
+    check("raw level lengths applied", firmware.geo.level_counts == [20, 17, 15],
+          firmware.geo.level_counts)
+    check("levels can use less than the whole strip",
+          firmware.geo.used == 52 and firmware.geo.n == 300,
+          "used %d of %d" % (firmware.geo.used, firmware.geo.n))
+    check("not treated as automatic", firmware.geo.auto_counts is False)
+
+    firmware.last_render_at = 0
+    firmware.mode = "idle"
+    firmware.show.set_pattern("solid", 0.0)
+    firmware.step(9000.0)
+    tail = [c for c in firmware.pixels.buffer[52:] if sum(c) > 0]
+    on_tree = [c for c in firmware.pixels.buffer[:52] if sum(c) > 0]
+    check("spare pixels past the last level stay dark", not tail,
+          "%d of %d lit" % (len(tail), 300 - 52))
+    check("the levels themselves light up", len(on_tree) == 52, len(on_tree))
+
+    # level 0 must be the bottom whichever end of the strip starts there
+    call("POST", "/api/config", {"start_at_bottom": False})
+    heights = firmware.geo.height_of
+    lowest = min(range(firmware.geo.turns), key=lambda k: heights[k])
+    check("level 0 stays at the bottom when the strip starts at the top",
+          firmware.geo.counts[lowest] == 20 and firmware.geo.level_counts == [20, 17, 15],
+          "strip order %s, bottom loop has %d" % (firmware.geo.counts, firmware.geo.counts[lowest]))
+    call("POST", "/api/config", {"start_at_bottom": True})
+
+    # a set that does not fit is refused and the cone shape comes back
+    state = call("POST", "/api/config", {"turns": 3, "loop_counts": [200, 200, 200]}).data
+    check("levels that overrun the strip are refused",
+          firmware.geo.auto_counts is True and state["config"]["loop_counts"] == [],
+          firmware.geo.counts)
+
+    # a lead-in and a tail at the same time
+    call("POST", "/api/config", {"turns": 3, "start_offset": 10, "loop_counts": [20, 17, 15]})
+    check("lead-in and spare tail together",
+          firmware.geo.offset == 10 and firmware.geo.used == 62,
+          "offset %d, used %d" % (firmware.geo.offset, firmware.geo.used))
+    firmware.last_render_at = 0
+    firmware.step(9100.0)
+    check("neither lead-in nor tail is ever lit",
+          not any(sum(c) for c in firmware.pixels.buffer[:10])
+          and not any(sum(c) for c in firmware.pixels.buffer[62:]),
+          "lead-in %s tail %s" % (firmware.pixels.buffer[:2], firmware.pixels.buffer[62:64]))
+
+    grid = firmware.geo.build_grid(8)
+    cells = {i for row in grid for cell in row for i in cell}
+    check("the game grid uses only pixels on the tree",
+          min(cells) == 10 and max(cells) == 61 and len(cells) == 52,
+          "%d..%d (%d)" % (min(cells), max(cells), len(cells)))
+
+    call("POST", "/api/config", {"turns": 12, "start_offset": 0, "loop_counts": []})
+
     # ---------------------------------------------------------- buttons ---
     check("buttons off by default", not firmware.controls.active)
     check("no input queued when there are no buttons", call("GET", "/api/input").data["presses"] == [])
