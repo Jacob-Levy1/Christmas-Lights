@@ -1,6 +1,42 @@
-# Written by the board at runtime when the admin settings are saved.
-config.json
+# This repository *is* the contents of the CIRCUITPY drive, so it lives on a
+# removable FAT volume that macOS, Windows and Linux all scribble on.  None
+# of that belongs in git: tracking it means every `git pull` tries to write
+# or delete files the operating system owns, and "System Volume Information"
+# in particular is locked down on Windows.
 
-# Local development
+# --- written by the board itself ---
+# saved admin settings
+config.json
+# CircuitPython version banner, rewritten on every boot
+boot_out.txt
+# may hold wifi credentials
+settings.toml
+# mount point for an SD card, if one is fitted
+sd/
+
+# --- macOS ---
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd/
+.TemporaryItems
+.apdisk
+.metadata_never_index
+.documentrevisions-v100
+.VolumeIcon.icns
+
+# --- Windows ---
+System Volume Information/
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# --- Linux ---
+.Trash-*
+.directory
+
+# --- local development ---
 __pycache__/
 *.pyc
