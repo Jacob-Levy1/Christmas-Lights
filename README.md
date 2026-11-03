@@ -133,7 +133,10 @@ line afterwards.
 
 The tree drawing at the top of the page is live: while you are playing it
 shows what you are sending, and the rest of the time it mirrors whatever the
-board is doing by itself.
+board is doing by itself. Under it, a line always says what is on the tree
+right now — *Idle show · Snowfall*, *🐍 Snake · you are driving*, *Setup
+pattern*, *Lights off* — and flares briefly whenever that changes, so a
+switch is something you see rather than something you work out.
 
 ### Snake
 
@@ -142,6 +145,18 @@ The tree is treated as a cylinder of cells, one row per loop. **▲** and
 pass the front you climb to the next layer, the same way the strip itself
 does. Set `Snake stays on its ring` in **Admin → Games** if you would rather
 it wrapped on the spot.
+
+Three difficulties, picked on the Play tab:
+
+| | Top and bottom | Your own tail | Speed |
+| --- | --- | --- | --- |
+| **Gentle** | wrap round | you can cross it | slow |
+| **Normal** (default) | wrap round | ends the game | medium |
+| **Hard** | are walls | ends the game | quick |
+
+So out of the box there are no walls at all — run off the top of the tree
+and you come back on at the bottom. The setting is saved on the board, and
+the board's own Snake (the one the buttons play) uses the same rules.
 
 You can also swipe on the tree picture instead of using the pad, and use the
 arrow keys on a laptop.

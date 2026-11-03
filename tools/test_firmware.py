@@ -514,13 +514,62 @@ def main():
           game._step((3, game.cols - 1), "right") == (3, 0),
           game._step((3, game.cols - 1), "right"))
 
-    # running off the top or bottom ends the game
+    # On the default difficulty the top of the tree joins the bottom, so
+    # running off the top wraps round instead of ending the game.  The walls
+    # only come back on "hard" -- see the difficulty checks below.
     game.spiral = True
     game.body = [(game.rows - 1, 0)]
     game.direction = "up"
     game.dead_at = 0.0
     game._advance(6100.0)
-    check("running off the top is a death", game.dead_at > 0, game.dead_at)
+    check("running off the top wraps round by default",
+          game.dead_at == 0 and game.body[0][0] == 0,
+          "head now at %s" % (game.body[0],))
+
+    # --- difficulty ---
+    for level, wraps, self_kills in (("gentle", True, False),
+                                     ("normal", True, True),
+                                     ("hard", False, True)):
+        call("POST", "/api/config", {"snake_difficulty": level})
+        fresh = firmware.snake_game.Snake(
+            firmware.geo, firmware.cfg["cols"], True, firmware.cfg["snake_difficulty"]
+        )
+        rows = fresh.rows
+        fresh.body = [(rows - 1, 2)]
+        fresh.direction = "up"
+        fresh.dead_at = 0.0
+        fresh._advance(100.0)
+        survived_top = fresh.dead_at == 0.0
+
+        doubled = firmware.snake_game.Snake(
+            firmware.geo, firmware.cfg["cols"], True, firmware.cfg["snake_difficulty"]
+        )
+        doubled.body = [(2, 2), (1, 2), (1, 3), (2, 3)]
+        doubled.direction = "down"
+        doubled.dead_at = 0.0
+        doubled._advance(100.0)
+        bit_itself = doubled.dead_at > 0.0
+
+        check(
+            "on-board snake: %s" % level,
+            survived_top == wraps and bit_itself == self_kills,
+            "wraps=%s self-kills=%s" % (survived_top, bit_itself),
+        )
+
+    check("difficulty is rejected if unknown",
+          call("POST", "/api/config", {"snake_difficulty": "sideways"}).data["config"]["snake_difficulty"] == "normal")
+    call("POST", "/api/config", {"snake_difficulty": "normal"})
+
+    # the board's game picks the setting up when it starts
+    firmware.mode = "idle"
+    call("POST", "/api/config", {"snake_difficulty": "hard"})
+    tap("select", 6500.0)
+    check("on-board game uses the configured difficulty",
+          firmware.onboard_game is not None
+          and firmware.onboard_game.rules is firmware.tree.SNAKE_DIFFICULTIES["hard"],
+          firmware.cfg["snake_difficulty"])
+    call("POST", "/api/config", {"snake_difficulty": "normal"})
+    firmware.mode = "idle"
 
     # --- holding select leaves the game ---
     io = firmware.controls.pins["select"]

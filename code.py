@@ -266,7 +266,9 @@ def stop_onboard_game():
 def start_onboard_game(now):
     """Start Snake on the board itself, played with the buttons."""
     global onboard_game, mode
-    onboard_game = snake_game.Snake(geo, cfg["cols"], cfg["snake_wrap"] != "ring")
+    onboard_game = snake_game.Snake(
+        geo, cfg["cols"], cfg["snake_wrap"] != "ring", cfg["snake_difficulty"]
+    )
     onboard_game.reset(now)
     mode = MODE_GAME
     set_brightness(cfg["brightness"])

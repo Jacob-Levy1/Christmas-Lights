@@ -65,6 +65,10 @@ DEFAULTS = {
     # --- games ----------------------------------------------------------
     "cols": 16,  # angular columns of the game grid
     "snake_wrap": "spiral",  # "spiral" (wrapping climbs a layer) or "ring"
+    # How forgiving Snake is.  "gentle": the top and bottom wrap round and
+    # the snake may cross itself.  "normal": they still wrap, but crossing
+    # yourself ends the game.  "hard": the ends are walls, and it is quicker.
+    "snake_difficulty": "normal",
     # --- optional physical buttons --------------------------------------
     # Each switch goes between its pin and ground; the internal pull-ups do
     # the rest.  Leave a pin blank to leave that button out.
@@ -104,6 +108,16 @@ _FLOAT_KEYS = (
     "rotation",
 )
 _BOOL_KEYS = ("start_at_bottom", "clockwise", "idle_cycle", "buttons_enabled")
+
+#: How Snake behaves at each difficulty.  ``wrap`` means the top and bottom
+#: of the tree join up instead of being walls; ``self_collide`` means running
+#: into your own tail ends the game.  Speeds are the seconds between moves at
+#: the start and the fastest it will ever get.
+SNAKE_DIFFICULTIES = {
+    "gentle": {"wrap": True, "self_collide": False, "start": 0.42, "fastest": 0.18, "step": 0.010},
+    "normal": {"wrap": True, "self_collide": True, "start": 0.32, "fastest": 0.11, "step": 0.012},
+    "hard": {"wrap": False, "self_collide": True, "start": 0.24, "fastest": 0.08, "step": 0.014},
+}
 
 #: Changing any of these re-claims the GPIO pins.
 BUTTON_KEYS = ("buttons_enabled",) + tuple("button_" + name for name in
@@ -184,6 +198,9 @@ def sanitise(raw):
                 out[key] = [max(1, int(x)) for x in value]
             elif key in ("snake_wrap",):
                 out[key] = "ring" if str(value) == "ring" else "spiral"
+            elif key == "snake_difficulty":
+                wanted = str(value)
+                out[key] = wanted if wanted in SNAKE_DIFFICULTIES else "normal"
             elif key == "wifi_mode":
                 out[key] = "sta" if str(value) == "sta" else "ap"
             else:

@@ -196,7 +196,7 @@ const Idle = {
         await App.pushConfig({ idle_pattern: button.dataset.pattern });
         await App.post('/api/mode', { mode: 'idle' });
         this.syncFromState();
-        App.clear();
+        await App.pollFrame();
       } catch (err) {
         App.toast('could not change the pattern', true);
       }
@@ -229,8 +229,8 @@ const Idle = {
     document.getElementById('idleApply').addEventListener('click', async () => {
       if (App.activity) App.stopActivity(false);
       App.live = false;
-      App.clear();
       await App.post('/api/mode', { mode: 'idle' });
+      await App.pollFrame();
       await App.refresh();
       App.toast('idle show running on the tree');
     });

@@ -16,6 +16,11 @@
 
 <div class="stage">
   <canvas id="tree" width="360" height="300"></canvas>
+  <div class="now" id="nowShowing">
+    <span class="dot"></span>
+    <b id="nowLabel">connecting…</b>
+    <span id="nowSub"></span>
+  </div>
   <div class="stage-note" id="stageNote"></div>
 </div>
 
@@ -37,6 +42,13 @@
     <button data-game="dodger">☄️ Dodge</button>
     <button data-game="simon">🔔 Simon</button>
   </div>
+
+  <div class="row segmented" id="snakeDifficulty" hidden>
+    <button data-diff="gentle">Gentle</button>
+    <button data-diff="normal" class="on">Normal</button>
+    <button data-diff="hard">Hard</button>
+  </div>
+  <div class="hint" id="difficultyHint" hidden></div>
 
   <div class="scorebar">
     <span id="gameTitle">Pick a game</span>

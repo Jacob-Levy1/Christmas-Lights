@@ -25,6 +25,24 @@ const Games = {
       if (button) this.input('quad' + button.dataset.quad);
     });
 
+    document.getElementById('snakeDifficulty').addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-diff]');
+      if (!button) return;
+      const wanted = button.dataset.diff;
+      document.querySelectorAll('#snakeDifficulty button').forEach((b) => {
+        b.classList.toggle('on', b === button);
+      });
+      this.showDifficulty(wanted);
+      try {
+        await App.pushConfig({ snake_difficulty: wanted });
+        // Restart so the new rules take effect straight away.
+        if (this.current && App.activity === this.current) this.start();
+        App.toast(wanted + ' snake');
+      } catch (err) {
+        App.toast('could not change the difficulty', true);
+      }
+    });
+
     document.getElementById('gameStart').addEventListener('click', () => this.start());
     document.getElementById('gameStop').addEventListener('click', () => {
       App.stopActivity();
@@ -64,6 +82,20 @@ const Games = {
     });
   },
 
+  /* Say in plain words what the chosen difficulty does. */
+  showDifficulty(level) {
+    const hint = document.getElementById('difficultyHint');
+    const words = {
+      gentle: 'Top and bottom wrap round, and you may cross your own tail. Slow.',
+      normal: 'Top and bottom wrap round, but crossing your own tail ends the game.',
+      hard: 'The top and bottom of the tree are walls, your tail is fatal, and it is quick.',
+    };
+    hint.textContent = words[level] || words.normal;
+    document.querySelectorAll('#snakeDifficulty button').forEach((b) => {
+      b.classList.toggle('on', b.dataset.diff === level);
+    });
+  },
+
   select(id) {
     this.id = id;
     document.querySelectorAll('#gamePicker button').forEach((b) => {
@@ -74,6 +106,10 @@ const Games = {
     document.getElementById('gameHint').textContent = meta.hint;
     document.getElementById('pad').hidden = id === 'simon';
     document.getElementById('simonPad').hidden = id !== 'simon';
+    const isSnake = id === 'snake';
+    document.getElementById('snakeDifficulty').hidden = !isSnake;
+    document.getElementById('difficultyHint').hidden = !isSnake;
+    if (isSnake) this.showDifficulty(App.state.config.snake_difficulty || 'normal');
     if (App.activity) App.stopActivity();
     this.setScore('');
   },
@@ -82,6 +118,7 @@ const Games = {
     if (!this.id) return;
     this.current = this.catalogue[this.id].make();
     this.current.tab = 'play';
+    this.current.label = this.catalogue[this.id].title;
     App.startActivity(this.current);
   },
 
@@ -124,17 +161,26 @@ const Games = {
 };
 
 /* ───────────────────────────── Snake ───────────────────────────── */
+/* How forgiving each difficulty is.  Kept in step with SNAKE_DIFFICULTIES
+ * in tree.py, which the board's own Snake uses. */
+const SNAKE_RULES = {
+  gentle: { wrap: true, selfCollide: false, start: 420, fastest: 180, step: 10 },
+  normal: { wrap: true, selfCollide: true, start: 320, fastest: 110, step: 12 },
+  hard: { wrap: false, selfCollide: true, start: 240, fastest: 80, step: 14 },
+};
+
 function makeSnake() {
   const rows = App.rows;
   const cols = App.cols;
   const spiral = App.state.config.snake_wrap !== 'ring';
+  const rules = SNAKE_RULES[App.state.config.snake_difficulty] || SNAKE_RULES.normal;
 
   let body = [];
   let dir = 'right';
   let pending = null;
   let food = null;
   let score = 0;
-  let interval = 320;
+  let interval = rules.start;
   let last = 0;
   let dead = 0;
 
@@ -149,6 +195,8 @@ function makeSnake() {
       c -= 1;
       if (c < 0) { c = cols - 1; if (spiral) r -= 1; }
     }
+    // Unless the ends are walls, the top of the tree joins the bottom.
+    if (rules.wrap) r = ((r % rows) + rows) % rows;
     return { r, c };
   }
 
@@ -165,7 +213,7 @@ function makeSnake() {
     dir = 'right';
     pending = null;
     score = 0;
-    interval = 320;
+    interval = rules.start;
     dead = 0;
     food = placeFood();
     Games.setScore('0');
@@ -175,8 +223,14 @@ function makeSnake() {
     if (pending) { dir = pending; pending = null; }
     const head = step(body[0], dir);
 
-    if (head.r < 0 || head.r >= rows) { dead = performance.now(); return; }
-    if (body.some((p, index) => index < body.length - 1 && p.r === head.r && p.c === head.c)) {
+    // With walls on, the ends of the tree are fatal; with them off, step()
+    // has already wrapped the row round.
+    if (!rules.wrap && (head.r < 0 || head.r >= rows)) {
+      dead = performance.now();
+      return;
+    }
+    if (rules.selfCollide
+      && body.some((p, index) => index < body.length - 1 && p.r === head.r && p.c === head.c)) {
       dead = performance.now();
       return;
     }
@@ -184,7 +238,7 @@ function makeSnake() {
     body.unshift(head);
     if (head.r === food.r && head.c === food.c) {
       score += 1;
-      interval = Math.max(110, interval - 12);
+      interval = Math.max(rules.fastest, interval - rules.step);
       food = placeFood();
       Games.setScore(String(score));
     } else {

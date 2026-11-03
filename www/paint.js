@@ -160,6 +160,7 @@ const Paint = {
     if (App.activity && App.activity.name === 'draw') return;
     App.startActivity({
       name: 'draw',
+      label: 'Your drawing',
       tab: 'draw',
       tick: () => {
         this.project(
@@ -267,6 +268,7 @@ const Paint = {
     let previous = performance.now();
     App.startActivity({
       name: 'photo',
+      label: 'Your picture',
       tab: 'photo',
       tick: (now) => {
         const seconds = Math.min(0.2, (now - previous) / 1000);

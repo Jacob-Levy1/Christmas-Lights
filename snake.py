@@ -8,14 +8,17 @@ builds the same grid for both, so they line up.
 
 import random
 
+from tree import SNAKE_DIFFICULTIES
+
 BACKGROUND = (0, 0, 0)
 
 
 class Snake:
-    def __init__(self, geometry, cols, spiral=True):
+    def __init__(self, geometry, cols, spiral=True, difficulty="normal"):
         self.geo = geometry
         self.cols = max(4, int(cols))
         self.spiral = spiral
+        self.rules = SNAKE_DIFFICULTIES.get(difficulty, SNAKE_DIFFICULTIES["normal"])
         self.grid = geometry.build_grid(self.cols)
         self.rows = len(self.grid)
         self.score = 0
@@ -27,7 +30,7 @@ class Snake:
         self.direction = "right"
         self.pending = None
         self.score = 0
-        self.interval = 0.34
+        self.interval = self.rules["start"]
         self.moved_at = now
         self.dead_at = 0.0
         self.food = self._place_food()
@@ -58,6 +61,9 @@ class Snake:
                 col = self.cols - 1
                 if self.spiral:
                     row -= 1
+        # Unless the ends are walls, the top of the tree joins the bottom.
+        if self.rules["wrap"]:
+            row %= self.rows
         return (row, col)
 
     def input(self, direction):
@@ -76,7 +82,9 @@ class Snake:
 
         head = self._step(self.body[0], self.direction)
         row = head[0]
-        if row < 0 or row >= self.rows or head in self.body[:-1]:
+        hit_wall = not self.rules["wrap"] and (row < 0 or row >= self.rows)
+        hit_self = self.rules["self_collide"] and head in self.body[:-1]
+        if hit_wall or hit_self:
             self.dead_at = now
             if self.score > self.best:
                 self.best = self.score
@@ -85,7 +93,7 @@ class Snake:
         self.body.insert(0, head)
         if head == self.food:
             self.score += 1
-            self.interval = max(0.11, self.interval - 0.012)
+            self.interval = max(self.rules["fastest"], self.interval - self.rules["step"])
             self.food = self._place_food()
         else:
             self.body.pop()

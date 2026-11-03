@@ -64,6 +64,7 @@ const App = {
 
   async refresh() {
     this.state = await this.get('/api/state');
+    if (!this.live) this.boardMode = this.state.mode;
     this.setGeometry(await this.get('/api/geometry'));
     this.setStatus();
     if (Admin.ready) Admin.syncFromState();
@@ -216,6 +217,11 @@ const App = {
 
   /* ───────────────────── transport ───────────────────── */
   async send() {
+    // Never send once we have handed the tree back.  A queued frame used to
+    // arrive after the hand-back, which put the board into live mode showing
+    // a blank frame until it timed out -- the tree went dark for several
+    // seconds every time you switched away from a game.
+    if (!this.live) { this.queued = false; return; }
     if (this.inflight) { this.queued = true; return; }
     this.inflight = true;
     this.lastSent = performance.now();
@@ -225,7 +231,6 @@ const App = {
         headers: { 'Content-Type': 'application/octet-stream' },
         body: this.frame,
       });
-      if (!this.live) { this.live = true; this.setStatus(); }
       // The board hands back any button presses on the same round trip, so
       // a controller costs us no extra requests while we are driving.
       if (this.buttonsWired) {
@@ -240,7 +245,8 @@ const App = {
       this.setStatus('lost the tree — reconnecting', 'bad');
     }
     this.inflight = false;
-    if (this.queued) { this.queued = false; this.send(); }
+    if (this.queued && this.live) { this.queued = false; this.send(); }
+    else this.queued = false;
   },
 
   /* Apply a config change on the board and pick up the new geometry. */
@@ -277,8 +283,10 @@ const App = {
   /* Give the tree back to its own idle show. */
   async releaseTree() {
     this.live = false;
+    this.queued = false;
     try {
       await this.post('/api/mode', { mode: 'idle' });
+      await this.pollFrame();
       await this.refresh();
     } catch (err) {
       /* the board will time out back to idle by itself */
@@ -291,6 +299,7 @@ const App = {
     this.polling = true;
     try {
       const data = await this.get('/api/frame');
+      this.boardMode = data.mode || this.boardMode;
       const hex = data.hex || '';
       const bytes = Math.min(this.frame.length, hex.length / 2);
       for (let i = 0; i < bytes; i++) {
@@ -308,7 +317,9 @@ const App = {
     this.stopActivity(false);
     this.activity = activity;
     this.live = true;
-    this.clear();
+    this.queued = false;
+    // No clear() here either: the activity paints the whole frame on its
+    // first tick, so blanking first would show one black frame.
     if (activity.start) activity.start();
     this.setStatus();
   },
@@ -317,9 +328,14 @@ const App = {
     if (this.activity && this.activity.stop) this.activity.stop();
     this.activity = null;
     this.live = false;
-    this.clear();
+    this.queued = false;
+    // The frame is deliberately *not* cleared: leaving the last one on show
+    // until the board's own picture arrives is what stops the preview
+    // blinking black on every switch.
     if (backToIdle) {
-      this.post('/api/mode', { mode: 'idle' }).catch(() => {});
+      this.post('/api/mode', { mode: 'idle' })
+        .then(() => this.pollFrame())
+        .catch(() => {});
       this.refresh().catch(() => {});
     }
     this.setStatus();
@@ -356,6 +372,7 @@ const App = {
       this.pollFrame();
     }
 
+    this.updateNow();
     this.drawPreview();
     requestAnimationFrame(() => this.loop());
   },
@@ -422,6 +439,58 @@ const App = {
       ctx.fill();
     }
     ctx.globalCompositeOperation = 'source-over';
+  },
+
+  /* ───────────────── what is on the tree ───────────────── */
+  /* One line that always says what the tree is showing, and flares when
+   * that changes, so switching between things is visible rather than
+   * something you have to infer from the lights. */
+  describeNow() {
+    if (this.activity) {
+      return {
+        kind: 'live',
+        label: this.activity.label || 'Your phone',
+        sub: 'you are driving',
+      };
+    }
+    const mode = this.boardMode || (this.state && this.state.mode) || 'idle';
+    if (mode === 'live') {
+      return { kind: 'live', label: 'Another device', sub: 'is driving the tree' };
+    }
+    if (mode === 'game') {
+      return { kind: 'live', label: 'Snake', sub: 'on the tree, played with the buttons' };
+    }
+    if (mode === 'test') {
+      const dark = this.frame && !this.frame.some((v) => v > 0);
+      return dark
+        ? { kind: 'off', label: 'Lights off', sub: '' }
+        : { kind: 'test', label: 'Setup pattern', sub: 'from the admin tab' };
+    }
+    return {
+      kind: 'idle',
+      label: 'Idle show',
+      sub: this.state ? this.patternLabel(this.state.config.idle_pattern) : '',
+    };
+  },
+
+  updateNow() {
+    const now = this.describeNow();
+    const key = now.kind + '|' + now.label + '|' + now.sub;
+    if (key === this._nowKey) return;
+    const first = this._nowKey === undefined;
+    this._nowKey = key;
+
+    const box = document.getElementById('nowShowing');
+    document.getElementById('nowLabel').textContent = now.label;
+    document.getElementById('nowSub').textContent = now.sub;
+    box.className = 'now ' + now.kind;
+    if (first) return;
+
+    // Restart the flare even if it is already running.
+    void box.offsetWidth;
+    box.classList.add('changed');
+    clearTimeout(this._nowFlare);
+    this._nowFlare = setTimeout(() => box.classList.remove('changed'), 1000);
   },
 
   /* ───────────────────── chrome ───────────────────── */

@@ -13,6 +13,12 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* Any rule that sets `display` outranks the `hidden` attribute's own
+   `display: none`, which silently leaves hidden things on screen.  Several
+   components here set display (.row, .pad, .simon-pad, .confirm), so make
+   `hidden` win everywhere rather than patching it case by case. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   background: var(--bg);
@@ -209,10 +215,6 @@ input[type=range]::-moz-range-thumb { width: 26px; height: 26px; border: 0; bord
 .toast.bad { border-color: var(--red); }
 
 /* ---------- deferred slider confirmation ---------- */
-/* `display: flex` would otherwise beat the `hidden` attribute's own
-   `display: none`, leaving every confirmation bar on screen at once. */
-.confirm[hidden] { display: none; }
-
 .confirm {
   display: flex; align-items: center; gap: 8px;
   margin: -4px 0 12px; padding: 8px 10px;
@@ -251,4 +253,35 @@ textarea.raw {
   margin: 8px 0 0; padding: 10px; overflow-x: auto;
   font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+}
+
+/* ---------- what the tree is showing right now ---------- */
+.now {
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px 0 2px; padding: 6px 14px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel); font-size: 12.5px;
+  max-width: 94%;
+}
+.now b { font-weight: 700; white-space: nowrap; }
+.now #nowSub { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now .dot {
+  width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px;
+  background: var(--muted);
+}
+.now.idle .dot { background: var(--green); }
+.now.live .dot { background: var(--accent); }
+.now.test .dot { background: var(--gold); }
+.now.off .dot { background: #4a5570; }
+
+/* A brief flare whenever what is on the tree changes, so a switch is
+   something you see rather than something you have to work out. */
+.now.changed { animation: nowChanged 1s ease-out; }
+@keyframes nowChanged {
+  0% { border-color: var(--gold); background: var(--panel-2); transform: scale(1.04); }
+  40% { border-color: var(--gold); background: var(--panel-2); transform: scale(1); }
+  100% { border-color: var(--line); background: var(--panel); transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .now.changed { animation: none; border-color: var(--gold); }
 }
