@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0b1220">
+<title>Christmas Tree</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand">🎄 Tree</div>
+  <div class="status" id="status">connecting…</div>
+</header>
+
+<div class="stage">
+  <canvas id="tree" width="360" height="300"></canvas>
+  <div class="now" id="nowShowing">
+    <span class="dot"></span>
+    <b id="nowLabel">connecting…</b>
+    <span id="nowSub"></span>
+  </div>
+  <div class="stage-note" id="stageNote"></div>
+</div>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="play" class="on">Play</button>
+  <button data-tab="draw">Draw</button>
+  <button data-tab="photo">Photo</button>
+  <button data-tab="idle">Patterns</button>
+  <button data-tab="admin">Admin</button>
+</nav>
+
+<main>
+
+<!-- ───────────────────────────── PLAY ───────────────────────────── -->
+<section id="tab-play" class="tab on">
+  <div class="games" id="gamePicker">
+    <button data-game="snake">🐍 Snake</button>
+    <button data-game="tetris">🧱 Rings</button>
+    <button data-game="dodger">☄️ Dodge</button>
+    <button data-game="simon">🔔 Simon</button>
+  </div>
+
+  <div class="row segmented" id="snakeDifficulty" hidden>
+    <button data-diff="gentle">Gentle</button>
+    <button data-diff="normal" class="on">Normal</button>
+    <button data-diff="hard">Hard</button>
+  </div>
+  <div class="hint" id="difficultyHint" hidden></div>
+
+  <div class="scorebar">
+    <span id="gameTitle">Pick a game</span>
+    <span class="score" id="gameScore"></span>
+  </div>
+  <div class="hint" id="gameHint">Games take over the tree while you play. Stop playing and the idle show comes back.</div>
+
+  <div class="pad" id="pad">
+    <button class="pad-up"    data-dir="up">▲<small>layer up</small></button>
+    <button class="pad-left"  data-dir="left">◀</button>
+    <button class="pad-mid"   data-dir="action">●</button>
+    <button class="pad-right" data-dir="right">▶</button>
+    <button class="pad-down"  data-dir="down">▼<small>layer down</small></button>
+  </div>
+
+  <div class="simon-pad" id="simonPad" hidden>
+    <button data-quad="0" style="--c:#ff3b3b">Front</button>
+    <button data-quad="1" style="--c:#3bd96b">Right</button>
+    <button data-quad="2" style="--c:#3b8cff">Back</button>
+    <button data-quad="3" style="--c:#ffcc33">Left</button>
+  </div>
+
+  <div class="row">
+    <button id="gameStart" class="primary">Start</button>
+    <button id="gameStop">Stop</button>
+  </div>
+</section>
+
+<!-- ───────────────────────────── DRAW ───────────────────────────── -->
+<section id="tab-draw" class="tab">
+  <div class="hint">Paint with your finger. <b>Front</b> maps your drawing onto the half of the tree facing you; <b>Wrap</b> wraps it all the way round.</div>
+  <canvas id="paint" width="120" height="160"></canvas>
+  <div class="row">
+    <label class="swatch"><input type="color" id="brushColor" value="#ff2d2d"></label>
+    <button data-brush="rainbow" id="brushRainbow">🌈</button>
+    <button data-brush="erase" id="brushErase">Eraser</button>
+    <button id="paintClear">Clear</button>
+  </div>
+  <label class="slider">Brush size <input type="range" id="brushSize" min="1" max="20" value="6"></label>
+  <div class="row segmented" id="drawProjection">
+    <button data-proj="front" class="on">Front</button>
+    <button data-proj="wrap">Wrap</button>
+  </div>
+</section>
+
+<!-- ───────────────────────────── PHOTO ──────────────────────────── -->
+<section id="tab-photo" class="tab">
+  <div class="hint">300 pixels is a very small screen — bold, high-contrast pictures read best. The front projection corrects for the cone, so the picture looks right when you stand in front of the tree.</div>
+  <label class="filepick">Choose a picture<input type="file" id="photoFile" accept="image/*"></label>
+  <canvas id="photo" width="120" height="160"></canvas>
+  <div class="row segmented" id="photoProjection">
+    <button data-proj="front" class="on">Front</button>
+    <button data-proj="wrap">Wrap</button>
+  </div>
+  <div class="row segmented" id="photoFit">
+    <button data-fit="cover" class="on">Fill</button>
+    <button data-fit="contain">Fit</button>
+    <button data-fit="stretch">Stretch</button>
+  </div>
+  <label class="slider">Brightness <input type="range" id="photoBrightness" min="20" max="200" value="105"></label>
+  <label class="slider">Contrast <input type="range" id="photoContrast" min="50" max="260" value="135"></label>
+  <label class="slider">Saturation <input type="range" id="photoSaturation" min="0" max="300" value="165"></label>
+  <label class="slider">Spin <input type="range" id="photoSpin" min="-100" max="100" value="0"></label>
+  <label class="slider">Turn <input type="range" id="photoOffset" min="0" max="100" value="0"></label>
+  <div class="row">
+    <button id="photoSend" class="primary">Show on tree</button>
+    <button id="photoStop">Stop</button>
+  </div>
+</section>
+
+<!-- ──────────────────────────── PATTERNS ────────────────────────── -->
+<section id="tab-idle" class="tab">
+  <div class="hint">These run on the tree itself, so they keep going after you close this page.</div>
+  <div class="pattern-grid" id="patternGrid"></div>
+  <label class="slider">Speed <output id="idleSpeedOut"></output><input type="range" id="idleSpeed" min="5" max="300" value="100"></label>
+  <label class="slider">Brightness <output id="idleBrightnessOut"></output><input type="range" id="idleBrightness" min="1" max="100" value="45"></label>
+  <label class="field">Palette
+    <select id="idlePalette"></select>
+  </label>
+  <label class="check"><input type="checkbox" id="idleCycle"> Cycle through patterns</label>
+  <label class="slider">Cycle every <output id="idleCycleSecsOut"></output><input type="range" id="idleCycleSecs" min="10" max="600" step="10" value="90"></label>
+  <div class="row">
+    <button id="idleApply" class="primary">Back to the idle show</button>
+    <button id="allOff">All off</button>
+  </div>
+</section>
+
+<!-- ───────────────────────────── ADMIN ──────────────────────────── -->
+<section id="tab-admin" class="tab">
+
+  <h2>Tree shape</h2>
+  <label class="slider">Rotations around the tree <output id="turnsOut"></output>
+    <input type="range" id="turns" min="1" max="40" value="12"></label>
+  <label class="slider">Top width <output id="topRatioOut"></output>
+    <input type="range" id="topRatio" min="2" max="100" value="18"></label>
+  <div class="loopmap" id="loopMap"></div>
+  <div class="looptune">
+    <span id="loopTuneLabel">Loop 1</span>
+    <span id="loopTuneMode"></span>
+  </div>
+  <div class="row">
+    <button id="loopMinus">− pixel</button>
+    <button id="loopPlus">+ pixel</button>
+    <button id="loopAuto">Auto</button>
+  </div>
+  <div class="hint">Tap a bar to pick a loop, then move pixels between it and the next one up until the lengths match your tree. “Auto” goes back to working them out from the cone shape.</div>
+  <label class="field">Lead-in pixels before the tree starts
+    <input type="number" id="startOffset" min="0" step="1"></label>
+  <div class="row">
+    <label class="check"><input type="checkbox" id="startAtBottom" checked> Strip starts at the bottom</label>
+  </div>
+  <div class="row">
+    <label class="check"><input type="checkbox" id="clockwise" checked> Winds clockwise</label>
+  </div>
+  <label class="slider">Spin whole tree <output id="rotationOut"></output>
+    <input type="range" id="rotation" min="0" max="100" value="0"></label>
+
+  <h2>Raw setup</h2>
+  <div class="hint">Type the tree out instead of nudging sliders. Level&nbsp;0 is the bottom. Counts can add up to less than the strip — whatever is left over at the end stays dark.</div>
+  <label class="field">How many levels <input type="number" id="rawLevels" min="1" max="64" step="1"></label>
+  <textarea id="rawText" class="raw" spellcheck="false" autocapitalize="off" autocomplete="off" rows="8"></textarea>
+  <div class="rawstatus" id="rawStatus"></div>
+  <div class="row">
+    <button id="rawApply" class="primary">Apply</button>
+    <button id="rawLoad">Load current</button>
+    <button id="rawEven">Even</button>
+  </div>
+  <details class="rawhelp">
+    <summary>Accepted ways of writing it</summary>
+    <pre>0 20l, 1 17l, 2 15l   level then count
+0: 20                 one per line
+1: 17
+20, 17, 15            counts only, bottom first
+20 17 15              spaces work too
+lead-in 12            pixels before loop 1
+# a hash starts a comment</pre>
+  </details>
+
+  <h2>Centre each loop on the front</h2>
+  <div class="hint">One pixel lights up. Slide until it is pointing straight at the front of the tree, then save it. Do a few loops and let the rest be filled in, or do them all.</div>
+  <div class="caldots" id="calDots"></div>
+  <div class="callabel" id="calLabel">Loop 1</div>
+  <label class="slider big">Move the light
+    <input type="range" id="calSlider" min="0" max="40" value="0"></label>
+  <div class="row">
+    <button id="calPrev">◀ Prev</button>
+    <button id="calSave" class="primary">Save front</button>
+    <button id="calNext">Next ▶</button>
+  </div>
+  <div class="row">
+    <button id="calInterpolate">Fill in the rest</button>
+    <button id="calReset">Clear all</button>
+  </div>
+
+  <h2>Check it</h2>
+  <div class="row wrap">
+    <button data-test="front_line">Front line</button>
+    <button data-test="loop">This loop</button>
+    <button data-test="quadrants">Quadrants</button>
+    <button data-test="markers">Every 10th</button>
+    <button data-test="off">Off</button>
+  </div>
+  <div class="hint">“Front line” lights one pixel per loop at the front. When the calibration is right they form a straight vertical line up the front of the tree.</div>
+
+  <h2>Hardware</h2>
+  <label class="field">Number of pixels <input type="number" id="numPixels" min="1" max="1200"></label>
+  <div class="hint">Two 300-LED reels chained together are 600 here. They must be joined end to end on the one data pin; a second reel on its own pin is not supported.</div>
+  <label class="field">Data pin <input type="text" id="pin" placeholder="GP0"></label>
+  <label class="field">Colour order
+    <select id="order"><option>GRB</option><option>RGB</option><option>GRBW</option><option>RGBW</option></select>
+  </label>
+  <label class="slider">Brightness for games &amp; pictures <output id="brightnessOut"></output>
+    <input type="range" id="brightness" min="1" max="100" value="45"></label>
+  <label class="slider">Idle frame rate <output id="fpsOut"></output>
+    <input type="range" id="fps" min="5" max="60" value="30"></label>
+
+  <h2>Games</h2>
+  <label class="slider">Columns around the tree <output id="colsOut"></output>
+    <input type="range" id="cols" min="4" max="40" value="16"></label>
+  <div class="row segmented" id="snakeWrap">
+    <button data-wrap="spiral" class="on">Snake climbs at the seam</button>
+    <button data-wrap="ring">Snake stays on its ring</button>
+  </div>
+
+  <h2>Buttons</h2>
+  <div class="hint">Optional. Wire each switch between its pin and ground — no resistors needed. While the tree is running its own show the buttons change pattern (◀ ▶) and brightness (▲ ▼), and <b>select</b> starts Snake on the tree itself. While a phone is playing, the buttons work as a controller for it.</div>
+  <label class="check"><input type="checkbox" id="buttonsEnabled"> Use physical buttons</label>
+  <div id="buttonFields">
+    <label class="field">Up <input type="text" id="buttonUp" placeholder="GP2"></label>
+    <label class="field">Down <input type="text" id="buttonDown" placeholder="GP3"></label>
+    <label class="field">Left <input type="text" id="buttonLeft" placeholder="GP4"></label>
+    <label class="field">Right <input type="text" id="buttonRight" placeholder="GP5"></label>
+    <label class="field">Select <input type="text" id="buttonSelect" placeholder="GP6"></label>
+    <div class="hint" id="buttonStatus"></div>
+  </div>
+
+  <h2>Wifi</h2>
+  <div class="row segmented" id="wifiMode">
+    <button data-wifi="ap" class="on">Own hotspot</button>
+    <button data-wifi="sta">Join my wifi</button>
+  </div>
+  <div id="apFields">
+    <label class="field">Hotspot name <input type="text" id="apSsid"></label>
+    <label class="field">Hotspot password <input type="text" id="apPassword"></label>
+  </div>
+  <div id="staFields" hidden>
+    <label class="field">Wifi name <input type="text" id="staSsid"></label>
+    <label class="field">Wifi password <input type="text" id="staPassword"></label>
+  </div>
+  <label class="field">Hostname <input type="text" id="hostname"></label>
+
+  <div class="row">
+    <button id="adminSave" class="primary">Save settings</button>
+    <button id="adminRestart">Restart tree</button>
+  </div>
+  <div class="hint" id="adminInfo"></div>
+  <div class="warn" id="unusedWarning" hidden></div>
+
+</section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="/app.js"></script>
+<script src="/games.js"></script>
+<script src="/paint.js"></script>
+<script src="/admin.js"></script>
+<script>App.boot();</script>
+</body>
+</html>
