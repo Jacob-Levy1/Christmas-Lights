@@ -24,6 +24,49 @@ board keeps the geometry, the calibration and the idle animations. That
 split is what makes the games smooth on a microcontroller, and it means the
 tree still does something pretty when no one is holding a phone.
 
+## Updating the tree
+
+Plug the Pico in and, from a terminal on the CIRCUITPY drive:
+
+```sh
+bash update.sh
+```
+
+That is all it needs. It brings the drive in line with `main`, and it is
+safe to run as often as you like — when there is nothing new it says so and
+stops. Run it with `bash update.sh`, not `./update.sh`: CIRCUITPY is a FAT
+volume and cannot record the executable bit. On Windows use Git Bash, which
+comes with Git for Windows.
+
+**The first time**, the script is not on your drive yet, so fetch it and
+run it in one go:
+
+```sh
+git fetch origin && git show origin/main:update.sh > update.sh && bash update.sh
+```
+
+What it does beyond `git pull`:
+
+* **Leaves the operating system's own files alone.** macOS, Windows and
+  Linux each write bookkeeping onto a removable volume, and a drive cloned
+  before those were untracked still has git watching them. A plain `git
+  pull` therefore tries to delete `System Volume Information`, which
+  Windows refuses, leaving the pull half-done. The script takes them out of
+  git first and never touches the files themselves.
+* **Keeps your settings.** `config.json` holds what you saved in Admin and
+  is never tracked, so an update cannot sweep it away — not even with
+  `--force`.
+* **Refuses to run over your edits.** If you have changed a tracked file on
+  the drive it stops and shows you what; `bash update.sh --force` discards
+  those edits and continues.
+* **Checks what landed**, and warns if `src/` is newer than the built page.
+* **Survives replacing itself**, which it does on most runs, by working
+  from a copy taken before anything is fetched.
+
+`bash tools/test_update.sh` exercises all of that against a pretend drive,
+starting from a clone old enough to still track the operating system's
+files.
+
 ## Signing in
 
 The tree's **setup** is behind a login; playing is not. Anyone on the
@@ -280,6 +323,7 @@ tree will not show.
 | `buttons.py` | Debounced reader for the optional GPIO buttons |
 | `snake.py` | Snake played on the board itself, with the buttons |
 | `boot.py` | Makes the flash writable when no computer is attached |
+| `update.sh` | Updates the drive from GitHub |
 | `tools/simulator.py` | Runs the whole web app on a laptop, no hardware |
 | `tools/test_firmware.py` | Tests `code.py` against mock hardware |
 
