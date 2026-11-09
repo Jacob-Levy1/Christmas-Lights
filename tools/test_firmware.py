@@ -12,9 +12,13 @@ pixel writes, or config changes that fail to resize a buffer.
 import json
 import os
 import sys
-import types
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import fake_hardware
+from fake_hardware import FakePin, FakeRequest, install_stubs  # noqa: F401
+
+ROOT = fake_hardware.ROOT
 
 FAILURES = []
 
@@ -25,199 +29,114 @@ def check(name, ok, detail=""):
         FAILURES.append(name)
 
 
-# ---------------------------------------------------------------- stubs ---
-class FakeStrip:
-    GRB = "GRB"
-
-    def __init__(self, pin, count, brightness=1.0, auto_write=False, pixel_order="GRB"):
-        self.pin = pin
-        self.count = count
-        self.brightness = brightness
-        self.pixel_order = pixel_order
-        self.buffer = [(0, 0, 0)] * count
-        self.shows = 0
-        self.deinited = False
-
-    def __setitem__(self, index, value):
-        if isinstance(index, slice):
-            start = index.start or 0
-            stop = index.stop if index.stop is not None else self.count
-            if not isinstance(value, (list, tuple)):
-                raise TypeError("expected a sequence of colours")
-            if len(value) != stop - start:
-                raise ValueError("length mismatch")
-            for offset, color in enumerate(value):
-                if len(color) != 3 or any(not isinstance(c, int) or c < 0 or c > 255 for c in color):
-                    raise ValueError("bad colour %r" % (color,))
-                self.buffer[start + offset] = tuple(color)
-        else:
-            self.buffer[index] = tuple(value)
-
-    def __getitem__(self, index):
-        return self.buffer[index]
-
-    def fill(self, color):
-        self.buffer = [tuple(color)] * self.count
-
-    def show(self):
-        self.shows += 1
-
-    def deinit(self):
-        self.deinited = True
-
-
-class FakePin:
-    """A GPIO pin with a pull-up: value is True until the switch pulls it low."""
-
-    instances = {}
-
-    def __init__(self, pin):
-        if pin in FakePin.instances and not FakePin.instances[pin].deinited:
-            raise ValueError("%s in use" % pin)
-        self.pin = pin
-        self.direction = None
-        self.pull = None
-        self.value = True
-        self.deinited = False
-        FakePin.instances[pin] = self
-
-    def deinit(self):
-        self.deinited = True
-
-    def press(self):
-        self.value = False
-
-    def release(self):
-        self.value = True
-
-
-class FakeRadio:
-    def __init__(self):
-        self.hostname = ""
-        self.ipv4_address_ap = "192.168.4.1"
-        self.ipv4_address = None
-        self.stations_ap = [object()]
-        self.ap = None
-
-    def start_ap(self, ssid=None, password=None):
-        self.ap = (ssid, password)
-
-    def set_ipv4_address_ap(self, **kwargs):
-        pass
-
-    def connect(self, ssid, password, timeout=10):
-        raise RuntimeError("no network in the test rig")
-
-
-class FakeRequest:
-    def __init__(self, body=b"", method="POST"):
-        if isinstance(body, (dict, list)):
-            body = json.dumps(body).encode()
-        self.body = body
-        self.method = method
-        self.query_params = {}
-        self.headers = {}
-
-
-class FakeResponse:
-    def __init__(self, request, body="", status=(200, "OK"), **kwargs):
-        self.request = request
-        self.body = body
-        self.status = status
-
-
-class FakeJSONResponse(FakeResponse):
-    def __init__(self, request, data, status=(200, "OK"), **kwargs):
-        super().__init__(request, data, status)
-        self.data = data
-
-
-class FakeServer:
-    def __init__(self, pool, root_path=None, debug=False):
-        self.routes = {}
-        self.request_buffer_size = 1024
-
-    def route(self, path, method="GET", **kwargs):
-        def decorate(func):
-            self.routes[(method, path)] = func
-            return func
-
-        return decorate
-
-    def start(self, host, port=80):
-        pass
-
-    def poll(self):
-        pass
-
-
-def install_stubs():
-    board = types.ModuleType("board")
-    for number in range(0, 29):
-        setattr(board, "GP%d" % number, "GP%d" % number)
-    sys.modules["board"] = board
-
-    neopixel = types.ModuleType("neopixel")
-    neopixel.NeoPixel = FakeStrip
-    neopixel.GRB = "GRB"
-    neopixel.RGB = "RGB"
-    sys.modules["neopixel"] = neopixel
-
-    wifi = types.ModuleType("wifi")
-    wifi.radio = FakeRadio()
-    sys.modules["wifi"] = wifi
-
-    ipaddress = types.ModuleType("ipaddress")
-    ipaddress.IPv4Address = lambda text: text
-    sys.modules["ipaddress"] = ipaddress
-
-    digitalio = types.ModuleType("digitalio")
-    digitalio.DigitalInOut = FakePin
-    digitalio.Direction = types.SimpleNamespace(INPUT="input", OUTPUT="output")
-    digitalio.Pull = types.SimpleNamespace(UP="up", DOWN="down")
-    sys.modules["digitalio"] = digitalio
-
-    socketpool = types.ModuleType("socketpool")
-    socketpool.SocketPool = lambda radio: object()
-    sys.modules["socketpool"] = socketpool
-
-    http = types.ModuleType("adafruit_httpserver")
-    http.POST = "POST"
-    http.GET = "GET"
-    http.Request = FakeRequest
-    http.Response = FakeResponse
-    http.JSONResponse = FakeJSONResponse
-    http.Server = FakeServer
-    sys.modules["adafruit_httpserver"] = http
-
-    import gc
-
-    if not hasattr(gc, "mem_free"):
-        gc.mem_free = lambda: 123456
-
-
 # ----------------------------------------------------------------- tests ---
 def main():
-    install_stubs()
-    sys.path.insert(0, ROOT)
-
     # Keep the test out of the real /config.json: on a board that path is the
     # CIRCUITPY root, but here it would be the machine's filesystem root and
     # would leak state between runs.
     import tempfile
 
-    import tree as tree_module
-
     handle = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
     handle.close()
     os.unlink(handle.name)
-    tree_module.CONFIG_PATH = handle.name
 
-    import code as firmware  # this is the board's code.py, not the stdlib
+    firmware = fake_hardware.load_firmware(handle.name)
+    import tree as tree_module
+    import pwhash
 
-    call = lambda method, path, body=b"": firmware.server.routes[(method, path)](
-        FakeRequest(body, method)
-    )
+    # Sign in with a credential of this test's own making, so the real
+    # default password never has to live in the repository.
+    TEST_EMAIL = "tester@example.com"
+    TEST_PASSWORD = "five-random-words-go-here"
+    salt = pwhash.random_hex(16)
+    digest, rounds = pwhash.hash_password(TEST_PASSWORD, salt)
+    firmware.cfg["admin_email"] = TEST_EMAIL
+    firmware.cfg["admin_salt"] = salt
+    firmware.cfg["admin_hash"] = digest
+    firmware.cfg["admin_rounds"] = rounds
+
+    session = {}
+
+    def call(method, path, body=b"", auth=True):
+        request = rig_request(body, method, auth and session or None)
+        return firmware.server.routes[(method, path)](request)
+
+    def rig_request(body, method, cookies):
+        return FakeRequest(body, method, cookies=cookies or {})
+
+    def sign_in(email=TEST_EMAIL, password=TEST_PASSWORD):
+        response = firmware.server.routes[("POST", "/api/login")](
+            FakeRequest({"email": email, "password": password}, "POST")
+        )
+        cookie = response.headers.get("Set-Cookie", "")
+        if "tree_session=" in cookie and response.status[0] == 200:
+            token = cookie.split("tree_session=")[1].split(";")[0]
+            if token:
+                session["tree_session"] = token
+        return response
+
+    # ------------------------------------------------------------- auth ---
+    check("starts signed out", call("GET", "/api/state").data["authed"] is False)
+    check("wifi password is hidden from a guest",
+          call("GET", "/api/state").data["config"]["ap_password"] == "",
+          repr(call("GET", "/api/state").data["config"]["ap_password"]))
+    check("admin email is not a secret",
+          call("GET", "/api/state").data["config"]["admin_email"] == TEST_EMAIL)
+    check("password hash is never handed out",
+          call("GET", "/api/state").data["config"]["admin_hash"] == "")
+
+    check("a guest cannot reshape the tree",
+          call("POST", "/api/config", {"turns": 20}).status[0] == 401,
+          call("POST", "/api/config", {"turns": 20}).status)
+    check("and the tree is unchanged", firmware.geo.turns == 12, firmware.geo.turns)
+    check("a guest cannot run the test patterns",
+          call("POST", "/api/test", {"kind": "front_line"}).status[0] == 401)
+    check("a guest cannot restart the board",
+          call("POST", "/api/restart", {}).status[0] == 401)
+    check("a guest cannot change the password",
+          call("POST", "/api/password", {"current": "x"}).status[0] == 401)
+    check("but a guest may change the idle pattern",
+          call("POST", "/api/config", {"idle_pattern": "snowfall"}).status[0] == 200)
+    check("and may play",
+          call("POST", "/api/frame", bytes([1, 1, 1] * 300)).status[0] == 200)
+    check("a guest mixing play and setup keys is refused whole",
+          call("POST", "/api/config", {"idle_speed": 2.0, "turns": 9}).status[0] == 401
+          and firmware.cfg["idle_speed"] != 2.0,
+          firmware.cfg["idle_speed"])
+
+    check("the wrong password is refused", sign_in(password="nope").status[0] == 401)
+    check("the right password with the wrong email is refused",
+          sign_in(email="someone@else.com").status[0] == 401)
+    check("no session was handed out", call("GET", "/api/state").data["authed"] is False)
+
+    # five failures in a row should hold the door shut
+    for _ in range(5):
+        sign_in(password="nope")
+    locked = sign_in()
+    check("too many attempts locks the login", locked.status[0] == 429, locked.status)
+    firmware.locked_until = 0.0
+    del firmware.login_failures[:]
+
+    response = sign_in()
+    check("signing in works", response.status[0] == 200 and session.get("tree_session"),
+          response.status)
+    check("the cookie is HttpOnly and same-site",
+          "HttpOnly" in response.headers["Set-Cookie"]
+          and "SameSite=Strict" in response.headers["Set-Cookie"],
+          response.headers["Set-Cookie"])
+    check("now signed in", call("GET", "/api/state").data["authed"] is True)
+    check("and the wifi password comes back",
+          call("GET", "/api/state").data["config"]["ap_password"] != "")
+    check("the hash was re-stretched for this board",
+          firmware.cfg["admin_rounds"] == pwhash.ROUNDS, firmware.cfg["admin_rounds"])
+    check("and the old password still works after re-stretching",
+          pwhash.verify_password(TEST_PASSWORD, firmware.cfg["admin_salt"],
+                                 firmware.cfg["admin_hash"], firmware.cfg["admin_rounds"]))
+
+    check("a made-up cookie is not a session",
+          firmware.server.routes[("GET", "/api/state")](
+              FakeRequest(b"", "GET", cookies={"tree_session": "0" * 48})
+          ).data["authed"] is False)
 
     check("boot created the strip", firmware.pixels.count == 300, firmware.pixels.count)
     check("hotspot started", firmware.wifi.radio.ap is not None, firmware.wifi.radio.ap)

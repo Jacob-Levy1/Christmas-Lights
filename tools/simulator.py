@@ -1,109 +1,69 @@
 #!/usr/bin/env python3
-"""Run the tree's web app on your laptop, with no hardware attached.
+"""Run the tree's firmware on your laptop, with no hardware attached.
 
-    python3 tools/simulator.py          # then open http://localhost:8080/
+    python3 tools/build.py          # bundle the web app
+    python3 tools/simulator.py      # then open http://localhost:8080/
 
-It serves the real files from ``www/`` and re-implements the board's HTTP API
-on top of the real :mod:`tree` and :mod:`patterns` modules, so geometry,
-calibration and the idle patterns behave exactly as they do on the Pico.
-Only the LEDs are faked -- the last frame is kept in memory and exposed at
-``/api/sim/frame`` as hex, which is also what the automated tests read.
+This imports the board's real ``code.py`` against the pretend hardware in
+``fake_hardware.py`` and hands it real HTTP requests, so the routes, the
+auth, the geometry and the patterns here are the same code that runs on the
+Pico -- not a second implementation that can drift away from it.  Only the
+LEDs are faked, and the last frame is exposed at ``/api/sim/frame`` for the
+automated tests to read.
 
-This is a development aid: the routes here mirror ``code.py``, so if you add
-an endpoint there, add it here too.
+A few ``/api/sim/...`` endpoints exist only here, for driving the pretend
+hardware: reading the strip, reading the board's game grid, and pressing the
+physical buttons.
 """
 
 import binascii
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import patterns  # noqa: E402
-import tree  # noqa: E402
+import fake_hardware  # noqa: E402
 
-WWW = os.path.join(ROOT, "www")
-CONTENT_TYPES = {
-    ".html": "text/html",
-    ".css": "text/css",
-    ".js": "text/javascript",
-    ".json": "application/json",
-    ".ico": "image/x-icon",
-    ".png": "image/png",
-    ".svg": "image/svg+xml",
+ROOT = fake_hardware.ROOT
+
+# Settings are kept in a scratch file, so a run always starts from the
+# defaults and never writes to the machine's filesystem root.
+_CONFIG = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+_CONFIG.close()
+os.unlink(_CONFIG.name)
+
+FIRMWARE = fake_hardware.load_firmware(_CONFIG.name)
+LOCK = threading.RLock()
+
+STATUS_TEXT = {
+    200: "OK", 204: "No Content", 304: "Not Modified", 400: "Bad Request",
+    401: "Unauthorized", 404: "Not Found", 406: "Not Acceptable",
+    429: "Too Many Requests", 500: "Internal Server Error",
 }
 
 
-class Tree:
-    """Everything code.py keeps in module globals, minus the LEDs."""
-
-    def __init__(self):
-        self.cfg = dict(tree.DEFAULTS)
-        self.cfg["front"] = []
-        self.cfg["calibrated"] = []
-        self.geo = tree.Geometry(self.cfg)
-        self.frame = [(0, 0, 0)] * self.geo.n
-        self.show = patterns.Patterns(self.geo, self.cfg)
-        self.mode = "idle"
-        self.started = time.monotonic()
-        # Pretend-wired buttons: POST /api/sim/press to simulate a press.
-        self.buttons = []
-        self.presses = []
-        self.last_frame_at = 0.0
-        self.lock = threading.Lock()
-
-    def rebuild(self):
-        self.geo.rebuild(self.cfg)
-        if len(self.frame) != self.geo.n:
-            self.frame = [(0, 0, 0)] * self.geo.n
-        self.show.set_geometry(self.geo)
-
-    def state(self):
-        return {
-            "mode": self.mode,
-            "clients": 1,
-            "network": {"mode": "ap", "address": "127.0.0.1", "hostname": self.cfg["hostname"]},
-            "config": self.cfg,
-            "persisted": True,
-            "patterns": [{"id": n, "label": l} for n, l in patterns.CATALOGUE],
-            "palettes": sorted(patterns.PALETTES.keys()),
-            "restart_keys": list(tree.RESTART_KEYS),
-            "uptime": int(time.monotonic() - self.started),
-            "free_memory": 128 * 1024,
-            "buttons": {
-                "active": bool(self.buttons),
-                "wired": sorted(self.buttons),
-                "warnings": [],
-                "labels": ["up", "down", "left", "right", "select"],
-            },
-            "onboard_game": False,
-            "fps_actual": float(self.cfg["fps"]),
-        }
-
-    def blank(self):
-        for i in range(self.geo.n):
-            self.frame[i] = (0, 0, 0)
-
-    def render_idle(self, now):
-        self.show.render(self.frame, now)
-
-
-TREE = Tree()
-
-
-def idle_thread():
+def animate():
+    """Stand in for the board's main loop."""
     while True:
-        with TREE.lock:
-            if TREE.mode == "live" and time.monotonic() - TREE.last_frame_at > 4.0:
-                TREE.mode = "idle"
-            if TREE.mode == "idle":
-                TREE.render_idle(time.monotonic())
-        time.sleep(1.0 / max(1, TREE.cfg["fps"]))
+        with LOCK:
+            try:
+                FIRMWARE.step(time.monotonic())
+            except Exception as err:  # pragma: no cover
+                print("render error:", err)
+        time.sleep(1.0 / max(1, FIRMWARE.cfg["fps"]))
+
+
+def frame_hex():
+    flat = bytearray()
+    for color in FIRMWARE.frame:
+        flat.extend(color)
+    return binascii.hexlify(flat).decode()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -112,201 +72,132 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
 
-    # -- helpers ---------------------------------------------------------
-    def reply(self, code, body=b"", content_type="application/octet-stream"):
-        self.send_response(code)
+    # -- plumbing --------------------------------------------------------
+    def reply(self, code, body=b"", content_type="text/plain", headers=None):
+        if isinstance(body, str):
+            body = body.encode()
+        self.send_response(code, STATUS_TEXT.get(code, ""))
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
-        if body:
+        if body and self.command != "HEAD":
             self.wfile.write(body)
 
     def reply_json(self, payload, code=200):
         self.reply(code, json.dumps(payload).encode(), "application/json")
 
-    def read_body(self):
+    def cookies(self):
+        raw = self.headers.get("Cookie", "")
+        out = {}
+        for part in raw.split(";"):
+            if "=" in part:
+                name, _, value = part.partition("=")
+                out[name.strip()] = value.strip()
+        return out
+
+    def build_request(self, method, path):
         length = int(self.headers.get("Content-Length", 0))
-        return self.rfile.read(length) if length else b""
+        body = self.rfile.read(length) if length else b""
+        return fake_hardware.FakeRequest(
+            body=body,
+            method=method,
+            headers={k: v for k, v in self.headers.items()},
+            cookies=self.cookies(),
+            path=path,
+        )
 
-    def read_json(self):
-        body = self.read_body()
-        try:
-            return json.loads(body) if body else {}
-        except ValueError:
-            return {}
+    def dispatch(self, method):
+        path = urlparse(self.path).path
 
-    # -- GET -------------------------------------------------------------
-    def do_GET(self):
-        path = self.path.split("?")[0]
+        if path.startswith("/api/sim/"):
+            return self.simulated(path, method)
 
-        if path == "/api/state":
-            with TREE.lock:
-                return self.reply_json(TREE.state())
-        if path == "/api/geometry":
-            with TREE.lock:
-                return self.reply_json(TREE.geo.describe())
-        if path == "/api/sim/grid":
-            # The board's own game grid, so tests can prove the browser
-            # builds exactly the same one.
-            with TREE.lock:
-                return self.reply_json({"grid": TREE.geo.build_grid(TREE.cfg["cols"])})
-        if path == "/api/input":
-            with TREE.lock:
-                presses = list(TREE.presses)
-                TREE.presses = []
-                return self.reply_json({"presses": presses, "mode": TREE.mode})
-        if path in ("/api/frame", "/api/sim/frame"):
-            with TREE.lock:
-                flat = bytearray()
-                for color in TREE.frame:
-                    flat.extend(color)
+        handler = FIRMWARE.server.routes.get((method, path))
+        if handler is None:
+            return self.reply(404, b"no such route", "text/plain")
+
+        request = self.build_request(method, path)
+        with LOCK:
+            try:
+                response = handler(request)
+            except Exception as err:  # pragma: no cover
+                import traceback
+
+                traceback.print_exc()
+                return self.reply(500, str(err).encode())
+            body = response.payload()
+            status = response.status
+            code = status[0] if isinstance(status, tuple) else 200
+            headers = dict(response.headers)
+            content_type = getattr(response, "content_type", None) or "text/plain"
+        headers.setdefault("Cache-Control", "no-store")
+        return self.reply(code, body, content_type, headers)
+
+    # -- simulator-only helpers -----------------------------------------
+    def simulated(self, path, method):
+        with LOCK:
+            if path == "/api/sim/frame":
+                return self.reply_json({"mode": FIRMWARE.mode, "hex": frame_hex()})
+            if path == "/api/sim/grid":
                 return self.reply_json(
-                    {"mode": TREE.mode, "hex": binascii.hexlify(flat).decode()}
+                    {"grid": FIRMWARE.geo.build_grid(FIRMWARE.cfg["cols"])}
                 )
+            if path == "/api/sim/press" and method == "POST":
+                return self.sim_press()
+        return self.reply(404, b"no such route")
 
-        if path == "/":
-            path = "/index.html"
-        target = os.path.normpath(os.path.join(WWW, path.lstrip("/")))
-        if not target.startswith(WWW) or not os.path.isfile(target):
-            return self.reply(404, b"not found", "text/plain")
-        extension = os.path.splitext(target)[1]
-        with open(target, "rb") as handle:
-            data = handle.read()
-        return self.reply(200, data, CONTENT_TYPES.get(extension, "text/plain"))
+    def sim_press(self):
+        """Press a real button on the pretend hardware.
 
-    # -- POST ------------------------------------------------------------
+        Goes through the firmware's own debouncing rather than faking the
+        queue, so what the tests exercise is the real path.
+        """
+        length = int(self.headers.get("Content-Length", 0))
+        payload = json.loads(self.rfile.read(length) or b"{}")
+
+        if not FIRMWARE.cfg["buttons_enabled"]:
+            FIRMWARE.cfg["buttons_enabled"] = True
+            FIRMWARE.controls.configure(FIRMWARE.cfg)
+
+        label = payload.get("press")
+        if label:
+            pin = FIRMWARE.controls.pins.get(label)
+            if pin is None:
+                return self.reply_json({"error": "no button called %r" % label}, 400)
+            now = time.monotonic()
+            pin.press()
+            FIRMWARE.handle_buttons(now)
+            FIRMWARE.handle_buttons(now + 0.05)
+            pin.release()
+            FIRMWARE.handle_buttons(now + 0.1)
+            FIRMWARE.handle_buttons(now + 0.15)
+        return self.reply_json(
+            {"wired": sorted(FIRMWARE.controls.pins), "queued": len(FIRMWARE.input_queue)}
+        )
+
+    # -- verbs -----------------------------------------------------------
+    def do_GET(self):
+        self.dispatch("GET")
+
     def do_POST(self):
-        path = self.path.split("?")[0]
+        self.dispatch("POST")
 
-        if path == "/api/frame":
-            body = self.read_body()
-            with TREE.lock:
-                n = TREE.geo.n
-                if len(body) == n * 3:
-                    data = body
-                else:
-                    try:
-                        data = binascii.unhexlify(body.strip())
-                    except Exception:
-                        data = body if len(body) % 3 == 0 else b""
-                count = min(n, len(data) // 3)
-                if count == 0:
-                    return self.reply_json({"error": "bad frame"}, 400)
-                for i in range(count):
-                    at = i * 3
-                    TREE.frame[i] = (data[at], data[at + 1], data[at + 2])
-                for i in range(count, n):
-                    TREE.frame[i] = (0, 0, 0)
-                TREE.mode = "live"
-                TREE.last_frame_at = time.monotonic()
-                presses = list(TREE.presses)
-                TREE.presses = []
-            return self.reply_json({"presses": presses})
-
-        if path == "/api/config":
-            incoming = self.read_json()
-            with TREE.lock:
-                changes = tree.sanitise(incoming)
-                restart = any(
-                    key in changes and changes[key] != TREE.cfg[key] for key in tree.RESTART_KEYS
-                )
-                TREE.cfg.update(changes)
-                if incoming.get("interpolate_front"):
-                    TREE.cfg["front"] = tree.interpolate_front(
-                        TREE.cfg["front"], TREE.cfg["calibrated"]
-                    )
-                TREE.rebuild()
-                if TREE.cfg["idle_pattern"] != TREE.show.name:
-                    TREE.show.set_pattern(TREE.cfg["idle_pattern"], time.monotonic())
-                payload = TREE.state()
-                payload["restart_needed"] = restart
-            return self.reply_json(payload)
-
-        if path == "/api/mode":
-            wanted = self.read_json().get("mode", "idle")
-            with TREE.lock:
-                if wanted == "idle":
-                    TREE.mode = "idle"
-                elif wanted == "off":
-                    TREE.mode = "test"
-                    TREE.blank()
-                return self.reply_json({"mode": TREE.mode})
-
-        if path == "/api/test":
-            payload = self.read_json()
-            with TREE.lock:
-                return self.reply_json(run_test(payload))
-
-        if path == "/api/sim/press":
-            payload = self.read_json()
-            with TREE.lock:
-                TREE.buttons = payload.get("wired", ["up", "down", "left", "right", "select"])
-                if payload.get("press"):
-                    TREE.presses.append(payload["press"])
-            return self.reply_json({"queued": len(TREE.presses), "wired": TREE.buttons})
-
-        if path == "/api/restart":
-            return self.reply_json({"restarting": True})
-
-        return self.reply(404, b"not found", "text/plain")
-
-
-def run_test(payload):
-    """Mirror of code.py's /api/test handler."""
-    geo, cfg, frame = TREE.geo, TREE.cfg, TREE.frame
-    kind = payload.get("kind", "off")
-    loop = int(payload.get("loop", 0)) % geo.turns
-    index = int(payload.get("index", 0))
-
-    TREE.mode = "test"
-    TREE.blank()
-
-    if kind == "calibrate":
-        count = geo.counts[loop]
-        start = geo.starts[loop]
-        for j in range(count):
-            frame[start + j] = (10, 6, 0)
-        frame[start + (index % count)] = (255, 255, 255)
-        if payload.get("save"):
-            cfg["front"][loop] = (index % count) / count
-            cfg["calibrated"][loop] = True
-            if payload.get("interpolate"):
-                cfg["front"] = tree.interpolate_front(cfg["front"], cfg["calibrated"])
-            TREE.rebuild()
-    elif kind == "front_line":
-        for k in range(geo.turns):
-            frame[geo.front_pixel(k)] = (255, 255, 255)
-    elif kind == "loop":
-        for i in geo.loop_pixels(loop):
-            frame[i] = (0, 180, 255)
-        frame[geo.front_pixel(loop)] = (255, 60, 0)
-    elif kind == "markers":
-        for i in range(0, geo.n, 10):
-            frame[i] = (90, 90, 90)
-        for i in range(0, geo.n, 50):
-            frame[i] = (255, 0, 0)
-    elif kind == "quadrants":
-        colors = ((255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 200, 0))
-        for i in range(geo.n):
-            frame[i] = colors[(geo.u[i] + 32) // 64 & 3]
-
-    return {
-        "mode": TREE.mode,
-        "kind": kind,
-        "loop": loop,
-        "count": geo.counts[loop],
-        "front": [round(x, 4) for x in cfg["front"]],
-        "calibrated": cfg["calibrated"],
-        "persisted": True,
-    }
+    def do_HEAD(self):
+        self.dispatch("GET")
 
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    threading.Thread(target=idle_thread, daemon=True).start()
+    page = os.path.join(ROOT, "www", "index.html.gz")
+    if not os.path.isfile(page):
+        raise SystemExit("run python3 tools/build.py first (no %s)" % page)
+
+    threading.Thread(target=animate, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print("Tree simulator on http://127.0.0.1:%d/  (ctrl-c to stop)" % port)
+    print("Running the real code.py; only the LEDs are pretend.")
     server.serve_forever()
 
 

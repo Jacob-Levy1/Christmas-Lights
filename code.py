@@ -24,10 +24,18 @@ import ipaddress
 import neopixel
 import socketpool
 import wifi
-from adafruit_httpserver import POST, JSONResponse, Request, Response, Server
+from adafruit_httpserver import (
+    POST,
+    FileResponse,
+    JSONResponse,
+    Request,
+    Response,
+    Server,
+)
 
 import buttons as button_driver
 import patterns
+import pwhash
 import snake as snake_game
 import tree
 
@@ -246,13 +254,107 @@ for warning in controls.warnings:
 network_mode, network_address = start_network()
 advertise_mdns()
 
+#: The web app is built into a single compressed file by tools/build.py, so
+#: opening the page is one request instead of six.  Everything after that is
+#: an API call.  The board serves no other file: there is no directory to
+#: walk and nothing to leak.
+PAGE = "/index.html.gz"
+PAGE_ROOT = "/www"
+
+
+def _page_etag():
+    """A tag that changes when the page does, so browsers can cache it.
+
+    tools/build.py writes it next to the bundle.  The board's working
+    directory is the root of the drive, but the simulator's is not, so both
+    spellings are tried.
+    """
+    for path in (PAGE_ROOT + PAGE + ".etag", (PAGE_ROOT + PAGE).lstrip("/") + ".etag"):
+        try:
+            with open(path, "r") as handle:
+                tag = handle.read().strip()[:32]
+            if tag:
+                return '"' + tag + '"'
+        except OSError:
+            continue
+    return '"dev"'
+
+
+PAGE_ETAG = _page_etag()
+
 pool = socketpool.SocketPool(wifi.radio)
-server = Server(pool, "/www", debug=False)
+server = Server(pool, None, debug=False)
 server.request_buffer_size = 2048
 # The server is synchronous: nothing is rendered while a request is being
 # served, and the stock one-second timeout means a phone that opens a
 # connection and then stalls would freeze the tree for a whole second.
 server.socket_timeout = 0.25
+
+
+# --------------------------------------------------------------------------
+# Admin login
+# --------------------------------------------------------------------------
+#: How long a login lasts before you have to sign in again.
+SESSION_TTL = 12 * 3600
+#: Failed attempts before the login is held shut for a while.
+MAX_FAILURES = 5
+LOCKOUT = 60.0
+
+sessions = {}
+login_failures = []
+locked_until = 0.0
+
+
+def _cookie(request, name):
+    try:
+        return (request.cookies or {}).get(name)
+    except Exception:
+        return None
+
+
+def is_authed(request):
+    token = _cookie(request, "tree_session")
+    if not token:
+        return False
+    expires = sessions.get(token)
+    if expires is None:
+        return False
+    if time.monotonic() > expires:
+        sessions.pop(token, None)
+        return False
+    return True
+
+
+def start_session():
+    """Mint a session token, dropping any that have expired."""
+    now = time.monotonic()
+    for token in [t for t, expires in sessions.items() if expires <= now]:
+        sessions.pop(token, None)
+    # A handful of devices is plenty; the oldest is dropped beyond that.
+    while len(sessions) >= 8:
+        oldest = min(sessions, key=lambda t: sessions[t])
+        sessions.pop(oldest, None)
+    token = pwhash.random_hex(24)
+    sessions[token] = now + SESSION_TTL
+    return token
+
+
+def session_cookie(token, clear=False):
+    if clear:
+        return "tree_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+    return (
+        "tree_session=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=%d"
+        % (token, SESSION_TTL)
+    )
+
+
+def deny(request):
+    """The response for an admin-only route without a login."""
+    return JSONResponse(
+        request,
+        {"error": "admin login required", "authed": False},
+        status=(401, "Unauthorized"),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -356,8 +458,10 @@ def handle_buttons(now):
 # --------------------------------------------------------------------------
 # API
 # --------------------------------------------------------------------------
-def state_payload():
+def state_payload(authed=False):
     return {
+        "authed": bool(authed),
+        "guest_keys": list(tree.GUEST_KEYS),
         "mode": mode,
         "clients": connected_clients(),
         "network": {
@@ -365,7 +469,7 @@ def state_payload():
             "address": network_address,
             "hostname": cfg["hostname"],
         },
-        "config": cfg,
+        "config": tree.public_config(cfg, authed),
         "persisted": config_persisted,
         "patterns": [{"id": name, "label": label} for name, label in patterns.CATALOGUE],
         "palettes": sorted(patterns.PALETTES.keys()),
@@ -383,14 +487,175 @@ def state_payload():
     }
 
 
+@server.route("/")
+def route_index(request: Request):
+    """The whole web app, in one compressed response."""
+    # Already in the browser's cache?  Then this costs a couple of hundred
+    # bytes instead of thirty kilobytes, and the strip keeps animating.
+    if request.headers.get("If-None-Match") == PAGE_ETAG:
+        return Response(
+            request,
+            "",
+            status=(304, "Not Modified"),
+            headers={"ETag": PAGE_ETAG, "Cache-Control": "no-cache"},
+        )
+
+    if "gzip" not in request.headers.get("Accept-Encoding", "").lower():
+        return Response(
+            request,
+            "This page is served compressed; use a browser that accepts gzip.",
+            status=(406, "Not Acceptable"),
+        )
+
+    return FileResponse(
+        request,
+        filename=PAGE,
+        root_path=PAGE_ROOT,
+        content_type="text/html",
+        buffer_size=2048,
+        headers={
+            "Content-Encoding": "gzip",
+            "ETag": PAGE_ETAG,
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
+@server.route("/favicon.ico")
+def route_favicon(request: Request):
+    return Response(request, "", status=(204, "No Content"))
+
+
 @server.route("/api/state")
 def route_state(request: Request):
-    return JSONResponse(request, state_payload())
+    return JSONResponse(request, state_payload(is_authed(request)))
 
 
 @server.route("/api/geometry")
 def route_geometry(request: Request):
     return JSONResponse(request, geo.describe())
+
+
+@server.route("/api/login", POST)
+def route_login(request: Request):
+    """Sign in to the admin settings."""
+    global locked_until
+
+    now = time.monotonic()
+    if now < locked_until:
+        return JSONResponse(
+            request,
+            {"error": "too many attempts, wait a moment", "retry_in": int(locked_until - now)},
+            status=(429, "Too Many Requests"),
+        )
+
+    payload = body_json(request)
+    email = str(payload.get("email", "")).strip().lower()
+    password = str(payload.get("password", ""))
+
+    email_ok = pwhash.constant_time_equals(email, cfg["admin_email"].strip().lower())
+    password_ok = pwhash.verify_password(
+        password, cfg["admin_salt"], cfg["admin_hash"], cfg["admin_rounds"]
+    )
+
+    # Both are always checked, and the reason is never given away: a wrong
+    # address and a wrong password look exactly the same from outside.
+    if not (email_ok and password_ok):
+        login_failures.append(now)
+        while login_failures and now - login_failures[0] > 300:
+            login_failures.pop(0)
+        if len(login_failures) >= MAX_FAILURES:
+            locked_until = now + LOCKOUT
+            del login_failures[:]
+        return JSONResponse(
+            request, {"error": "wrong email or password"}, status=(401, "Unauthorized")
+        )
+
+    del login_failures[:]
+    rehash_if_needed(password)
+    token = start_session()
+    return JSONResponse(
+        request,
+        {"authed": True},
+        headers={"Set-Cookie": session_cookie(token)},
+    )
+
+
+def rehash_if_needed(password):
+    """Re-stretch the stored hash to suit this board.
+
+    The shipped hash uses few rounds so it verifies on any build.  Once we
+    know whether this one has a native hashlib, store a hash at the round
+    count that suits it.
+    """
+    global config_persisted
+    if cfg["admin_rounds"] == pwhash.ROUNDS:
+        return
+    try:
+        salt = pwhash.random_hex(16)
+        digest, rounds = pwhash.hash_password(password, salt)
+        cfg["admin_salt"] = salt
+        cfg["admin_hash"] = digest
+        cfg["admin_rounds"] = rounds
+        config_persisted = tree.save_config(cfg)
+    except Exception as err:  # pragma: no cover
+        print("could not re-hash the admin password:", err)
+
+
+@server.route("/api/logout", POST)
+def route_logout(request: Request):
+    token = _cookie(request, "tree_session")
+    if token:
+        sessions.pop(token, None)
+    return JSONResponse(
+        request,
+        {"authed": False},
+        headers={"Set-Cookie": session_cookie(None, clear=True)},
+    )
+
+
+@server.route("/api/password", POST)
+def route_password(request: Request):
+    """Change the admin email or password.  Requires being signed in."""
+    global config_persisted
+
+    if not is_authed(request):
+        return deny(request)
+
+    payload = body_json(request)
+    current = str(payload.get("current", ""))
+    if not pwhash.verify_password(
+        current, cfg["admin_salt"], cfg["admin_hash"], cfg["admin_rounds"]
+    ):
+        return JSONResponse(
+            request, {"error": "current password is wrong"}, status=(401, "Unauthorized")
+        )
+
+    email = str(payload.get("email", "")).strip()
+    new_password = str(payload.get("password", ""))
+    if email:
+        cfg["admin_email"] = email[:64]
+    if new_password:
+        if len(new_password) < 8:
+            return JSONResponse(
+                request,
+                {"error": "use at least 8 characters"},
+                status=(400, "Bad Request"),
+            )
+        salt = pwhash.random_hex(16)
+        digest, rounds = pwhash.hash_password(new_password, salt)
+        cfg["admin_salt"] = salt
+        cfg["admin_hash"] = digest
+        cfg["admin_rounds"] = rounds
+        # Every other device is signed out when the password changes.
+        token = _cookie(request, "tree_session")
+        keep = sessions.get(token)
+        sessions.clear()
+        if token and keep:
+            sessions[token] = keep
+
+    config_persisted = tree.save_config(cfg)
+    return JSONResponse(request, {"ok": True, "persisted": config_persisted})
 
 
 @server.route("/api/input")
@@ -412,8 +677,24 @@ def route_config(request: Request):
     """Apply (and try to save) a partial config update."""
     global config_persisted
 
+    authed = is_authed(request)
     incoming = body_json(request)
     changes = tree.sanitise(incoming)
+
+    # A guest may change what the tree is playing, not how it is built.
+    if not authed:
+        blocked = [key for key in changes if key not in tree.GUEST_KEYS]
+        if blocked or incoming.get("interpolate_front"):
+            return JSONResponse(
+                request,
+                {
+                    "error": "admin login required to change the setup",
+                    "blocked": sorted(blocked),
+                    "authed": False,
+                },
+                status=(401, "Unauthorized"),
+            )
+
     restart_needed = any(
         key in changes and changes[key] != cfg[key] for key in tree.RESTART_KEYS
     )
@@ -434,7 +715,7 @@ def route_config(request: Request):
     set_brightness(cfg["idle_brightness"] if mode == MODE_IDLE else cfg["brightness"])
 
     config_persisted = tree.save_config(cfg)
-    payload = state_payload()
+    payload = state_payload(authed)
     payload["restart_needed"] = restart_needed
     return JSONResponse(request, payload)
 
@@ -530,6 +811,9 @@ def route_test(request: Request):
     """Admin helpers: calibration dot, front line, ring walk, markers."""
     global mode, last_test_at, config_persisted
 
+    if not is_authed(request):
+        return deny(request)
+
     payload = body_json(request)
     kind = payload.get("kind", "off")
     loop = int(payload.get("loop", 0)) % geo.turns
@@ -598,6 +882,9 @@ def route_test(request: Request):
 
 @server.route("/api/restart", POST)
 def route_restart(request: Request):
+    if not is_authed(request):
+        return deny(request)
+
     import supervisor
 
     supervisor.reload()

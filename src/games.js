@@ -219,19 +219,22 @@ function makeSnake() {
     Games.setScore('0');
   }
 
-  function advance() {
+  /* `now` is passed in rather than read from the clock, so the game runs
+   * off a single time source and behaves the same under test as it does in
+   * front of you.  (snake.py has always worked this way.) */
+  function advance(now) {
     if (pending) { dir = pending; pending = null; }
     const head = step(body[0], dir);
 
     // With walls on, the ends of the tree are fatal; with them off, step()
     // has already wrapped the row round.
     if (!rules.wrap && (head.r < 0 || head.r >= rows)) {
-      dead = performance.now();
+      dead = now;
       return;
     }
     if (rules.selfCollide
       && body.some((p, index) => index < body.length - 1 && p.r === head.r && p.c === head.c)) {
-      dead = performance.now();
+      dead = now;
       return;
     }
 
@@ -261,7 +264,7 @@ function makeSnake() {
       if (dead) {
         // Flash the whole tree red, then start over.
         const since = now - dead;
-        const level = since % 300 < 150 ? 120 : 10;
+        const level = since % 300 < 150 ? 255 : 0;
         App.clear();
         for (let r = 0; r < rows; r++) {
           for (let c = 0; c < cols; c++) App.setCell(r, c, level, 0, 0);
@@ -270,23 +273,34 @@ function makeSnake() {
         return;
       }
 
-      if (now - last >= interval) { last = now; advance(); }
+      if (now - last >= interval) { last = now; advance(now); }
 
       App.clear();
 
-      // Food pulses so you can spot it round the back of the tree.
-      const pulse = 150 + Math.round(105 * Math.sin(now / 160));
-      App.setCell(food.r, food.c, pulse, Math.round(pulse * 0.15), 0);
+      // Everything here is picked for contrast on a real tree, where the
+      // lights are small, far apart and seen past branches:
+      //   food  deep red, hard on/off rather than a gentle fade
+      //   body  saturated green that never dims below half
+      //   head  full white, the only white on the tree
+      // Pure hues with no shared channel keep them apart even out of focus.
+      const bright = Math.sin(now / 130) > 0;
+      App.setCell(food.r, food.c, 255, 0, 0);
+      if (bright) {
+        // A white halo on the ring either side makes the food findable
+        // round the back of the tree without washing the colour out.
+        App.setCell(food.r, food.c - 1, 90, 0, 0);
+        App.setCell(food.r, food.c + 1, 90, 0, 0);
+      }
 
       for (let k = body.length - 1; k >= 0; k--) {
         const part = body[k];
-        if (k === 0) {
-          App.setCell(part.r, part.c, 255, 255, 240);
-        } else {
-          const fade = 1 - (k / (body.length + 3)) * 0.65;
-          App.setCell(part.r, part.c, Math.round(20 * fade), Math.round(225 * fade), Math.round(70 * fade));
-        }
+        if (k === 0) continue;
+        // Taper only to half, so the tail is still clearly a snake.
+        const fade = 1 - (k / (body.length + 1)) * 0.5;
+        App.setCell(part.r, part.c, 0, Math.round(255 * fade), Math.round(40 * fade));
       }
+      // The head last, so it always wins where the body overlaps it.
+      App.setCell(body[0].r, body[0].c, 255, 255, 255);
     },
   };
 }

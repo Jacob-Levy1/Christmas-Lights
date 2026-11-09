@@ -78,6 +78,16 @@ DEFAULTS = {
     "button_left": "GP4",
     "button_right": "GP5",
     "button_select": "GP6",
+    # --- admin login ----------------------------------------------------
+    # The password is never stored, only a salted, stretched hash of it.
+    # The shipped hash uses few rounds so it verifies quickly even on a
+    # build with no native hashlib; the board re-hashes at its own round
+    # count the first time you log in.
+    "admin_email": "jacobelilevy@gmail.com",
+    "admin_salt": "d2ce35207b4091025cf399c9d3e53724",
+    "admin_hash": "289343372c075230e0cfd5c7b6083c5439399cd92193c200fd910452c344f9e3",
+    "admin_rounds": 150,
+
     # --- networking -----------------------------------------------------
     "wifi_mode": "ap",  # "ap" = own hotspot, "sta" = join your wifi
     "ap_ssid": "ChristmasTree",
@@ -99,7 +109,8 @@ RESTART_KEYS = (
     "hostname",
 )
 
-_INT_KEYS = ("num_pixels", "turns", "fps", "cols", "idle_cycle_secs", "start_offset")
+_INT_KEYS = ("num_pixels", "turns", "fps", "cols", "idle_cycle_secs", "start_offset",
+             "admin_rounds")
 _FLOAT_KEYS = (
     "top_ratio",
     "brightness",
@@ -119,6 +130,23 @@ SNAKE_DIFFICULTIES = {
     "hard": {"wrap": False, "self_collide": True, "start": 0.24, "fastest": 0.08, "step": 0.014},
 }
 
+#: Settings a guest may change without logging in: the things you would
+#: want a visitor to be able to play with.  Everything else -- the tree's
+#: shape, calibration, hardware, wifi and the login itself -- is admin only.
+GUEST_KEYS = (
+    "idle_pattern",
+    "idle_speed",
+    "idle_brightness",
+    "idle_palette",
+    "idle_cycle",
+    "idle_cycle_secs",
+    "snake_difficulty",
+    "snake_wrap",
+)
+
+#: Never sent to a client that has not logged in.
+SECRET_KEYS = ("ap_password", "sta_password", "admin_salt", "admin_hash")
+
 #: Changing any of these re-claims the GPIO pins.
 BUTTON_KEYS = ("buttons_enabled",) + tuple("button_" + name for name in
                                            ("up", "down", "left", "right", "select"))
@@ -126,6 +154,7 @@ BUTTON_KEYS = ("buttons_enabled",) + tuple("button_" + name for name in
 _LIMITS = {
     "num_pixels": (1, 1200),
     "start_offset": (0, 1199),
+    "admin_rounds": (1, 500000),
     "turns": (1, 64),
     "fps": (1, 60),
     "cols": (4, 48),
@@ -163,6 +192,21 @@ def load_config():
     except (OSError, ValueError):
         pass
     return cfg
+
+
+def public_config(cfg, authed):
+    """A copy of the config safe to hand to a client.
+
+    Without a login the wifi passwords and the password hash are withheld:
+    anyone who can reach the tree can call /api/state, and the hotspot
+    password should not be one of the things they get back.
+    """
+    out = dict(cfg)
+    if not authed:
+        for key in SECRET_KEYS:
+            if key in out:
+                out[key] = ""
+    return out
 
 
 def save_config(cfg):

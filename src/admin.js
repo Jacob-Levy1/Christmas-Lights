@@ -290,10 +290,23 @@ const Idle = {
 const Admin = {
   ready: false,
   loop: 0,
+  wired: false,
 
+  /* The sign-in form is wired up straight away; the rest of the admin tab
+   * is only built once you are actually signed in, so a guest's page never
+   * even holds the controls. */
   init() {
     this.ready = true;
     Idle.init();
+    this.wireLogin();
+    if (!App.authed()) { this.showLocked(); return; }
+    this.wireAdmin();
+  },
+
+  wireAdmin() {
+    if (this.wired) { this.showUnlocked(); this.syncFromState(); return; }
+    this.wired = true;
+    this.showUnlocked();
 
     const shape = debounce((patch) => {
       App.pushConfig(patch)
@@ -493,6 +506,114 @@ const Admin = {
     this.syncFromState();
   },
 
+  /* ---------------- signing in ---------------- */
+  wireLogin() {
+    const status = document.getElementById('loginStatus');
+    const attempt = async () => {
+      const email = document.getElementById('loginEmail').value.trim();
+      const password = document.getElementById('loginPassword').value;
+      if (!email || !password) {
+        status.textContent = 'Enter your email and password.';
+        status.className = 'rawstatus bad';
+        return;
+      }
+      status.textContent = 'Checking…';
+      status.className = 'rawstatus';
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          status.textContent = data.retry_in
+            ? `Too many attempts — try again in ${data.retry_in}s.`
+            : (data.error || 'Wrong email or password.');
+          status.className = 'rawstatus bad';
+          return;
+        }
+        document.getElementById('loginPassword').value = '';
+        status.textContent = '';
+        await App.refresh();
+        this.wireAdmin();
+        this.showUnlocked();
+        App.toast('signed in');
+      } catch (err) {
+        status.textContent = 'Could not reach the tree.';
+        status.className = 'rawstatus bad';
+      }
+    };
+
+    document.getElementById('loginGo').addEventListener('click', attempt);
+    document.getElementById('loginPassword').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') attempt();
+    });
+
+    document.getElementById('logoutGo').addEventListener('click', async () => {
+      await App.post('/api/logout', {}).catch(() => {});
+      await App.refresh();
+      this.showLocked();
+      App.toast('signed out');
+    });
+
+    document.getElementById('pwSave').addEventListener('click', () => this.changePassword());
+  },
+
+  showLocked() {
+    document.getElementById('adminLocked').hidden = false;
+    document.getElementById('adminBody').hidden = true;
+  },
+
+  showUnlocked() {
+    document.getElementById('adminLocked').hidden = true;
+    document.getElementById('adminBody').hidden = false;
+    document.getElementById('adminWho').textContent =
+      'Signed in as ' + (App.state.config.admin_email || '');
+  },
+
+  async changePassword() {
+    const status = document.getElementById('pwStatus');
+    const current = document.getElementById('pwCurrent').value;
+    const email = document.getElementById('pwEmail').value.trim();
+    const password = document.getElementById('pwNew').value;
+    if (!current) {
+      status.textContent = 'Enter your current password first.';
+      status.className = 'rawstatus bad';
+      return;
+    }
+    if (!email && !password) {
+      status.textContent = 'Nothing to change.';
+      status.className = 'rawstatus bad';
+      return;
+    }
+    try {
+      const res = await fetch('/api/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current, email, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        status.textContent = data.error || 'Could not update the sign-in.';
+        status.className = 'rawstatus bad';
+        return;
+      }
+      ['pwCurrent', 'pwEmail', 'pwNew'].forEach((id) => {
+        document.getElementById(id).value = '';
+      });
+      status.textContent = data.persisted
+        ? 'Sign-in updated. Other devices have been signed out.'
+        : 'Updated for now, but it could not be written to flash.';
+      status.className = 'rawstatus good';
+      await App.refresh();
+      this.showUnlocked();
+    } catch (err) {
+      status.textContent = 'Could not reach the tree.';
+      status.className = 'rawstatus bad';
+    }
+  },
+
   async save() {
     const wifiMode = document.querySelector('#wifiMode button.on').dataset.wifi;
     const patch = {
@@ -538,6 +659,8 @@ const Admin = {
     if (!this.ready) { this.init(); return; }
     const state = App.state;
     if (!state) return;
+    if (!App.authed()) { this.showLocked(); return; }
+    if (!this.wired) { this.wireAdmin(); return; }
     const cfg = state.config;
 
     if (this.sliders) {

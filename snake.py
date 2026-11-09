@@ -110,7 +110,7 @@ class Snake:
             out[i] = BACKGROUND
 
         if self.dead_at:
-            level = 130 if int((now - self.dead_at) * 4) % 2 == 0 else 10
+            level = 255 if int((now - self.dead_at) * 4) % 2 == 0 else 0
             for row in range(self.rows):
                 for col in range(self.cols):
                     self._paint(out, row, col, (level, 0, 0))
@@ -122,17 +122,19 @@ class Snake:
             self.moved_at = now
             self._advance(now)
 
-        pulse = 150 + int(100 * (1 if int(now * 6) % 2 == 0 else 0.4))
-        if pulse > 255:
-            pulse = 255
-        self._paint(out, self.food[0], self.food[1], (pulse, pulse // 7, 0))
+        # Picked for contrast on a real tree: pure red food, pure green
+        # body that never dims below half, and a white head that is the
+        # only white light on the whole tree.
+        self._paint(out, self.food[0], self.food[1], (255, 0, 0))
+        if int(now * 4) % 2 == 0:
+            self._paint(out, self.food[0], self.food[1] - 1, (90, 0, 0))
+            self._paint(out, self.food[0], self.food[1] + 1, (90, 0, 0))
 
         count = len(self.body)
-        for k in range(count - 1, -1, -1):
+        for k in range(count - 1, 0, -1):
             row, col = self.body[k]
-            if k == 0:
-                self._paint(out, row, col, (255, 255, 240))
-            else:
-                fade = 1.0 - (k / (count + 3)) * 0.65
-                self._paint(out, row, col, (int(20 * fade), int(225 * fade), int(70 * fade)))
+            fade = 1.0 - (k / (count + 1)) * 0.5
+            self._paint(out, row, col, (0, int(255 * fade), int(40 * fade)))
+        head_row, head_col = self.body[0]
+        self._paint(out, head_row, head_col, (255, 255, 255))
         return True

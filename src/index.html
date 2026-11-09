@@ -139,6 +139,23 @@
 <!-- ───────────────────────────── ADMIN ──────────────────────────── -->
 <section id="tab-admin" class="tab">
 
+  <div id="adminLocked">
+    <h2>Sign in</h2>
+    <div class="hint">The tree's setup is behind a password so a visitor cannot reshape it. Anyone can still play the games and change the idle pattern without signing in.</div>
+    <label class="field">Email <input type="email" id="loginEmail" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false"></label>
+    <label class="field">Password <input type="password" id="loginPassword" autocomplete="current-password"></label>
+    <div class="row"><button id="loginGo" class="primary">Sign in</button></div>
+    <div class="rawstatus" id="loginStatus"></div>
+    <div class="hint">Over the tree's own hotspot this is plain HTTP, so treat the wifi password as the real lock. Signing in keeps guests out of the settings; it is not protection against someone already on the network who is watching the traffic.</div>
+  </div>
+
+  <div id="adminBody" hidden>
+
+  <div class="row signedin">
+    <span id="adminWho"></span>
+    <button id="logoutGo">Sign out</button>
+  </div>
+
   <h2>Tree shape</h2>
   <label class="slider">Rotations around the tree <output id="turnsOut"></output>
     <input type="range" id="turns" min="1" max="40" value="12"></label>
@@ -267,6 +284,14 @@ lead-in 12            pixels before loop 1
   <div class="hint" id="adminInfo"></div>
   <div class="warn" id="unusedWarning" hidden></div>
 
+  <h2>Change the password</h2>
+  <label class="field">Current password <input type="password" id="pwCurrent" autocomplete="current-password"></label>
+  <label class="field">New email <input type="email" id="pwEmail" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false"></label>
+  <label class="field">New password <input type="password" id="pwNew" autocomplete="new-password"></label>
+  <div class="row"><button id="pwSave" class="primary">Update sign-in</button></div>
+  <div class="rawstatus" id="pwStatus"></div>
+
+  </div>
 </section>
 
 </main>

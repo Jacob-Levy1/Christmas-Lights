@@ -84,6 +84,13 @@ const App = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),
     });
+    if (res.status === 401) {
+      // The session has gone, or this needed a sign-in we do not have.
+      if (this.state) this.state.authed = false;
+      if (Admin.ready) Admin.showLocked();
+      this.toast('sign in on the admin tab to change that', true);
+      throw new Error('not signed in');
+    }
     if (!res.ok) throw new Error(url + ' -> ' + res.status);
     const text = await res.text();
     return text ? JSON.parse(text) : {};
@@ -247,6 +254,10 @@ const App = {
     this.inflight = false;
     if (this.queued && this.live) { this.queued = false; this.send(); }
     else this.queued = false;
+  },
+
+  authed() {
+    return !!(this.state && this.state.authed);
   },
 
   /* Apply a config change on the board and pick up the new geometry. */
@@ -415,6 +426,11 @@ const App = {
 
     const frame = this.frame;
     const order = this.order;
+    // Whichever brightness the board is applying right now.
+    const config = this.state ? this.state.config : null;
+    const scale = config
+      ? (this.live ? config.brightness : config.idle_brightness)
+      : 1;
     ctx.globalCompositeOperation = 'lighter';
     for (let k = 0; k < order.length; k++) {
       const i = order[k];
@@ -428,12 +444,17 @@ const App = {
       const size = 1.6 + 2.2 * depth;
       const alpha = 0.18 + 0.82 * depth;
 
-      ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+      // Show the colour the strip will actually produce.  The board scales
+      // every pixel by the brightness setting, and an LED's output is far
+      // closer to linear in that value than a screen's is, so without this
+      // the preview is brighter and flatter than the tree.
+      const glow = scale * alpha;
+      ctx.fillStyle = `rgba(${toScreen(r)},${toScreen(g)},${toScreen(b)},${glow})`;
       ctx.beginPath();
       ctx.arc(x, y, size, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = `rgba(${r},${g},${b},${alpha * 0.14})`;
+      ctx.fillStyle = `rgba(${toScreen(r)},${toScreen(g)},${toScreen(b)},${glow * 0.14})`;
       ctx.beginPath();
       ctx.arc(x, y, size * 3, 0, Math.PI * 2);
       ctx.fill();
@@ -558,6 +579,21 @@ const App = {
 /* How often the page asks the board what it is showing, in milliseconds.
  * Every request steals time from the strip, so keep this gentle. */
 const PREVIEW_POLL_MS = 400;
+
+/* An LED driven at half its value looks about half as bright; the same
+ * number sent to a screen looks much brighter than that, because the screen
+ * applies sRGB gamma.  Undo it, so the preview reads like the tree. */
+const SCREEN = new Uint8Array(256);
+for (let v = 0; v < 256; v++) {
+  const linear = v / 255;
+  const encoded = linear <= 0.0031308
+    ? linear * 12.92
+    : 1.055 * Math.pow(linear, 1 / 2.4) - 0.055;
+  SCREEN[v] = Math.round(encoded * 255);
+}
+function toScreen(value) {
+  return SCREEN[value];
+}
 
 function unhex(text) {
   const out = new Uint8Array(text.length / 2);

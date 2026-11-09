@@ -292,3 +292,10 @@ textarea.raw {
   background: rgba(255, 200, 74, .08);
   font-size: 12.5px; line-height: 1.5; color: var(--text);
 }
+
+.signedin {
+  align-items: center; justify-content: space-between;
+  font-size: 12.5px; color: var(--muted);
+}
+.signedin span { flex: 1; }
+.signedin button { flex: 0 0 auto; }

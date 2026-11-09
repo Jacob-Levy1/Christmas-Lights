@@ -24,6 +24,27 @@ board keeps the geometry, the calibration and the idle animations. That
 split is what makes the games smooth on a microcontroller, and it means the
 tree still does something pretty when no one is holding a phone.
 
+## Signing in
+
+The tree's **setup** is behind a login; playing is not. Anyone on the
+network can open the page, play the games, draw, and change the idle
+pattern. Changing the tree's shape, calibration, hardware, wifi or the
+password needs the admin email and password.
+
+The password was generated when this was set up and is **not** in this
+repository. Change it under **Admin → Change the password**; the new one is
+salted, stretched and stored as a hash, and every other device is signed
+out.
+
+> **What this does and does not protect.** The board speaks plain HTTP over
+> its own hotspot, so the wifi password is the real boundary. Signing in
+> stops a guest reshaping your tree; it is not protection against someone
+> already on the network who is watching the traffic. Accordingly: the wifi
+> passwords and the password hash are never sent to a client that has not
+> signed in, failed logins are rate-limited, the session cookie is HttpOnly
+> and `SameSite=Strict`, and the board serves exactly one file — there is no
+> directory to walk.
+
 ## Getting it running
 
 1. Copy everything in this repository onto the `CIRCUITPY` drive — this
@@ -232,34 +253,55 @@ rotates them on a timer.
 
 These run on the board, so they keep going once you close the page.
 
+## How the page is served
+
+The Pico answers one HTTP request at a time and renders nothing while it is
+doing so, so a page made of six files meant six round trips with the lights
+frozen in between. `tools/build.py` inlines the stylesheet and every script
+into one document and gzips it, so opening the app is **one request of about
+30 kB**; everything after that is an API call. An ETag means a browser that
+has been here before gets a 304 of a couple of hundred bytes instead.
+
+**Edit `src/`, then run `python3 tools/build.py`.** The board only ever
+serves `www/index.html.gz`, so a change you have not built is a change the
+tree will not show.
+
 ## Files
 
 | File | What it is |
 | --- | --- |
 | `code.py` | Boot, wifi, HTTP API, main loop |
+| `pwhash.py` | Salted password hashing (native hashlib, or a bundled pure-Python SHA-256) |
+| `src/` | Web app sources — edit these |
+| `www/index.html.gz` | The built page, the only file the board serves |
 | `tree.py` | Config, the geometry model (per-pixel angle/height tables) and the game grid |
 | `config.json` | Written by the board; `loop_counts` is the level lengths, bottom first |
 | `patterns.py` | The idle animations |
 | `buttons.py` | Debounced reader for the optional GPIO buttons |
 | `snake.py` | Snake played on the board itself, with the buttons |
 | `boot.py` | Makes the flash writable when no computer is attached |
-| `www/` | The web app (`app.js` core, `games.js`, `paint.js`, `admin.js`) |
 | `tools/simulator.py` | Runs the whole web app on a laptop, no hardware |
 | `tools/test_firmware.py` | Tests `code.py` against mock hardware |
 
 ### Developing without the tree
 
 ```sh
+python3 tools/build.py          # bundle the web app
 python3 tools/simulator.py      # http://localhost:8080/
 python3 tools/test_firmware.py  # checks the real code.py
 ```
 
-The simulator serves the real `www/` files and re-implements the board's API
-on top of the real `tree.py` and `patterns.py`, so geometry, calibration and
-the idle patterns behave exactly as they do on hardware — only the LEDs are
-faked. It also exposes `GET /api/frame`, which is how the browser tests
-assert what ended up on the tree. **Its routes mirror `code.py`, so if you
-add an endpoint to one, add it to the other.**
+The simulator **imports the board's real `code.py`** and hands it real HTTP
+requests, with `tools/fake_hardware.py` standing in for the CircuitPython
+modules it expects. The routes, the auth, the geometry and the patterns are
+therefore the same code that runs on the Pico — there is no second
+implementation to drift out of step with it, which there used to be. Only
+the LEDs are pretend.
+
+A few simulator-only endpoints exist for driving the pretend hardware:
+`/api/sim/frame` reads the strip, `/api/sim/grid` reads the board's game
+grid, and `/api/sim/press` presses a physical button — through the
+firmware's own debouncing, not around it.
 
 ## HTTP API
 
@@ -269,11 +311,14 @@ add an endpoint to one, add it to the other.**
 | `GET` | `/api/geometry` | Loop lengths and the per-pixel angle/height tables (hex) |
 | `GET` | `/api/frame` | The frame currently on the tree, as hex |
 | `GET` | `/api/input` | Drain queued button presses (used as a controller by the web app) |
+| `POST` | `/api/login` | Sign in; sets an HttpOnly session cookie |
+| `POST` | `/api/logout` | End the session |
+| `POST` | `/api/password` | Change the admin email or password (signed in) |
 | `POST` | `/api/frame` | Show a frame: `3 × num_pixels` raw bytes, or the same as hex |
-| `POST` | `/api/config` | Apply and save a partial config update |
+| `POST` | `/api/config` | Apply and save a partial config update — signed in, except for the idle pattern, speed, brightness, palette, cycling and the snake settings, which a guest may change |
 | `POST` | `/api/mode` | `{"mode": "idle"}` or `{"mode": "off"}` |
-| `POST` | `/api/test` | Calibration dot, front line, ring, quadrants, markers |
-| `POST` | `/api/restart` | Reload CircuitPython |
+| `POST` | `/api/test` | Calibration dot, front line, ring, quadrants, markers (signed in) |
+| `POST` | `/api/restart` | Reload CircuitPython (signed in) |
 
 ```sh
 # paint every pixel dim red, from anywhere on the network
