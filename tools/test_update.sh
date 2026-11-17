@@ -35,6 +35,17 @@ any_artefact_tracked() {
 }
 clean_tree() { [ -z "$(git status --porcelain --untracked-files=no)" ]; }
 
+# The drive is made by cloning, so everything except update.sh itself is
+# tested as committed, not as it sits in the working tree.  Say so up front
+# rather than let an uncommitted .gitignore look like a broken test.
+PENDING="$(git -C "$ROOT" status --porcelain -- .gitignore .gitattributes)"
+if [ -n "$PENDING" ]; then
+    echo "note: .gitignore/.gitattributes have uncommitted changes, which this"
+    echo "      test cannot see -- it clones, so it checks committed state."
+    echo "$PENDING" | sed 's/^/      /'
+    echo
+fi
+
 # An origin, and a drive sitting on the commit before the artefacts were
 # untracked -- the state a drive cloned months ago would be in.
 git clone --quiet --bare "$ROOT" "$WORK/origin.git"
@@ -91,6 +102,68 @@ check "and nothing was changed behind your back" grep -q edited code.py
 check "--force succeeds" bash update.sh --branch "$BRANCH" --force
 checkn "--force discards the edit" grep -q edited code.py
 check "--force keeps your saved settings" same "$(cat config.json)" '{"turns": 9}' 
+
+# --------------------------------------------------------------------------
+# Files the operating system writes must be ignored, and must survive an
+# update.  These are the ones that actually turn up on a drive that has been
+# plugged into all three systems.
+# --------------------------------------------------------------------------
+cd "$WORK/drive"
+
+OS_FILES=(
+    ".DS_Store"
+    "._resourcefork"
+    ".Spotlight-V100/store.db"
+    ".DocumentRevisions-V100/db"
+    ".com.apple.timemachine.donotpresent"
+    ".TemporaryItems/folders"
+    "System Volume Information/WPSettings.dat"
+    "Thumbs.db"
+    "desktop.ini"
+    "\$RECYCLE.BIN/desktop.ini"
+    ".Trash-1000"
+    ".directory"
+    "boot_out.txt"
+    "settings.toml"
+    "config.json"
+)
+
+for path in "${OS_FILES[@]}"; do
+    mkdir -p "$(dirname "$path")" 2>/dev/null || true
+    printf 'written by the operating system\n' > "$path"
+done
+
+echo
+for path in "${OS_FILES[@]}"; do
+    check "git ignores $path" git check-ignore -q -- "$path"
+done
+
+checkn "so none of them shows up as untracked" \
+    sh -c 'git status --porcelain | grep -qv "^$"'
+
+# An update must leave every one of them alone.
+check "an update still runs with all of them present" \
+    bash update.sh --branch "$BRANCH" --force
+
+for path in "${OS_FILES[@]}"; do
+    check "survived the update: $path" test -e "$path"
+done
+
+# --------------------------------------------------------------------------
+# A checkout on Windows must not rewrite the shell script with CRLF, which
+# makes bash fail on its first line.
+# --------------------------------------------------------------------------
+echo
+git clone --quiet -c core.autocrlf=true "$WORK/origin.git" "$WORK/windows"
+cd "$WORK/windows"
+git checkout --quiet "$BRANCH" 2>/dev/null || true
+
+checkn "a Windows checkout leaves update.sh with LF endings" \
+    grep -q $'\r' update.sh
+check "so the script still runs there" bash update.sh --help
+checkn "and code.py is not rewritten either" grep -q $'\r' code.py
+check "the built page survives as valid gzip" gzip -t www/index.html.gz
+check "byte for byte" cmp -s www/index.html.gz "$ROOT/www/index.html.gz"
 
 cd "$ROOT"
 echo

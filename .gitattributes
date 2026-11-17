@@ -1,0 +1,27 @@
+# This repository is checked out onto the CIRCUITPY drive and run from
+# there, so what lands on disk has to be exactly what was committed.
+#
+# Without the line below, Git for Windows -- which sets core.autocrlf=true
+# by default -- rewrites every text file with CRLF endings on checkout, and
+# `bash update.sh` then fails on its first line with
+# "$'\r': command not found".  Forcing LF makes the checkout the same on
+# every machine, whatever that machine's git is configured to do.
+
+* text=auto eol=lf
+
+# These must land byte for byte.  Git usually guesses right, but the page
+# the board serves is a gzip stream and the NeoPixel driver is compiled
+# bytecode: neither survives being treated as text, so say so rather than
+# leave it to a heuristic.
+*.gz      binary
+*.mpy     binary
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.ico     binary
+*.bin     binary
+*.uf2     binary
+
+# Keep diffs of the built page out of the way: it is generated from src/
+# by tools/build.py and there is nothing useful to read in the diff.
+www/index.html.gz -diff

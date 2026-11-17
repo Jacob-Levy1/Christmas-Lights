@@ -67,6 +67,33 @@ What it does beyond `git pull`:
 starting from a clone old enough to still track the operating system's
 files.
 
+### The drive's own files
+
+Two files keep git out of the operating system's way, and both matter
+because this repository is checked out *onto* the drive rather than into a
+working copy somewhere safe.
+
+`.gitignore` lists everything the three operating systems write to a
+removable volume — `System Volume Information`, `.Spotlight-V100`,
+`.fseventsd`, `.Trashes`, `$RECYCLE.BIN`, `Thumbs.db`, `.DS_Store` and the
+rest — plus the files the board itself writes: `config.json` (your saved
+settings), `boot_out.txt` and `settings.toml`. None of them is tracked, so
+no update can delete them. `update.sh` then checks, before and after, that
+nothing in that list is about to go or has gone.
+
+`.gitattributes` forces every text file to check out with LF endings.
+Without it, Git for Windows — which sets `core.autocrlf=true` by default —
+rewrites them with CRLF, and `bash update.sh` fails on its first line with
+`$'\r': command not found`. It also marks `www/index.html.gz` and
+`lib/neopixel.mpy` as binary rather than leaving git to guess: one is a
+gzip stream and the other compiled bytecode, and neither survives being
+treated as text.
+
+The test suite covers both: it writes fifteen of those operating-system
+files onto a pretend drive and checks each is ignored and still there after
+an update, then clones the repository the way Git for Windows would and
+checks the script still runs and the gzipped page is byte-identical.
+
 ## Signing in
 
 The tree's **setup** is behind a login; playing is not. Anyone on the
@@ -324,6 +351,8 @@ tree will not show.
 | `snake.py` | Snake played on the board itself, with the buttons |
 | `boot.py` | Makes the flash writable when no computer is attached |
 | `update.sh` | Updates the drive from GitHub |
+| `.gitignore` | Keeps the operating system's files out of git |
+| `.gitattributes` | LF line endings everywhere; marks the binaries as binary |
 | `tools/simulator.py` | Runs the whole web app on a laptop, no hardware |
 | `tools/test_firmware.py` | Tests `code.py` against mock hardware |
 

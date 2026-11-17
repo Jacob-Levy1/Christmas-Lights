@@ -76,6 +76,11 @@ ARTEFACTS=(
     "sd"
 )
 
+present_before=()
+for path in "${ARTEFACTS[@]}"; do
+    [ -e "$path" ] && present_before+=("$path")
+done
+
 tracked_artefacts=()
 for path in "${ARTEFACTS[@]}"; do
     if git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
@@ -123,6 +128,19 @@ if [ "$before" = "$target" ]; then
     exit 0
 fi
 
+# Nothing in an update should ever remove a file the operating system
+# owns.  If one is about to go, the untracking above did not do its job --
+# stop, rather than let git start a delete that Windows will refuse to
+# finish and leave the drive half-updated.
+doomed="$(git diff --name-only --diff-filter=D HEAD "$target" -- "${ARTEFACTS[@]}" 2>/dev/null || true)"
+if [ -n "$doomed" ]; then
+    say ""
+    printf '%s\n' "$doomed" | sed 's/^/   /'
+    die "The update would delete the files above, which belong to the operating
+   system, not to this project. Stopping rather than leaving the drive
+   half-updated. Please report this; it should not be possible."
+fi
+
 step "Updating to $(git log -1 --format='%h %s' "origin/$BRANCH")"
 git log --oneline "HEAD..origin/$BRANCH" 2>/dev/null | sed 's/^/   /' || true
 
@@ -140,6 +158,18 @@ for path in code.py boot.py tree.py patterns.py buttons.py snake.py pwhash.py \
     [ -e "$path" ] || missing+=("$path")
 done
 [ ${#missing[@]} -eq 0 ] || die "These should be on the drive but are not: ${missing[*]}"
+
+# The whole point of the untracking above: these had to survive.
+if [ ${#present_before[@]} -gt 0 ]; then
+    lost=()
+    for path in "${present_before[@]}"; do
+        [ -e "$path" ] || lost+=("$path")
+    done
+    if [ ${#lost[@]} -gt 0 ]; then
+        die "The update removed files belonging to the operating system: ${lost[*]}
+   They will be recreated, but this should not have happened."
+    fi
+fi
 
 # The board serves a prebuilt page; if the sources are newer than the
 # bundle, someone committed a change without building it.

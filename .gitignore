@@ -2,7 +2,12 @@
 # removable FAT volume that macOS, Windows and Linux all scribble on.  None
 # of that belongs in git: tracking it means every `git pull` tries to write
 # or delete files the operating system owns, and "System Volume Information"
-# in particular is locked down on Windows.
+# in particular is locked down on Windows, so a pull that tries stops there
+# half-finished.
+#
+# Patterns are matched case-sensitively on a case-sensitive filesystem, so
+# where an operating system picks an odd capitalisation it is spelled here
+# exactly as that system writes it.
 
 # --- written by the board itself ---
 # saved admin settings
@@ -17,25 +22,39 @@ sd/
 # --- macOS ---
 .DS_Store
 ._*
+.AppleDouble
+.AppleDB
+.AppleDesktop
+.LSOverride
 .Spotlight-V100
 .Trashes
-.fseventsd/
+.fseventsd
 .TemporaryItems
-.apdisk
-.metadata_never_index
+.DocumentRevisions-V100
 .documentrevisions-v100
 .VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.metadata_never_index
+.metadata_never_index_unless_rootfs
+.apdisk
+# the custom-folder-icon file is literally "Icon" followed by a carriage return
+Icon?
 
 # --- Windows ---
-System Volume Information/
+System Volume Information
 Thumbs.db
+Thumbs.db:encryptable
 ehthumbs.db
+ehthumbs_vista.db
 desktop.ini
 $RECYCLE.BIN/
+*.stackdump
 
 # --- Linux ---
 .Trash-*
 .directory
+.fuse_hidden*
+.nfs*
 
 # --- local development ---
 __pycache__/
