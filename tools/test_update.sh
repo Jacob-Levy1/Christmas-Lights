@@ -162,8 +162,31 @@ checkn "a Windows checkout leaves update.sh with LF endings" \
     grep -q $'\r' update.sh
 check "so the script still runs there" bash update.sh --help
 checkn "and code.py is not rewritten either" grep -q $'\r' code.py
+
+# The launcher cmd.exe runs has to go the other way: a batch file with Unix
+# line endings can be mis-parsed, so it must arrive with CRLF on every
+# machine, not only on Windows.
+check "update.bat is there for Windows" test -f update.bat
+check "and arrives with CRLF, as cmd.exe needs" grep -q $'\r' update.bat
+check "and hands over to update.sh" grep -q "update.sh" update.bat
+check "rather than carrying its own copy of the logic" \
+    sh -c '! grep -qi "git pull\|git reset\|git fetch" update.bat'
+check "it runs the script by a relative name, which bash can resolve" \
+    grep -q '"%BASH%" update.sh' update.bat
+check "after moving to the drive it sits on" grep -q 'cd /d "%~dp0"' update.bat
+
+# ...and that is also how the shell script gets invoked, so check it works
+# called that way from the drive's own directory.
+check "update.sh works when run by its bare name" bash update.sh --help
 check "the built page survives as valid gzip" gzip -t www/index.html.gz
 check "byte for byte" cmp -s www/index.html.gz "$ROOT/www/index.html.gz"
+
+# A checkout that converts nothing must come out the same way.
+git clone --quiet -c core.autocrlf=false "$WORK/origin.git" "$WORK/plain"
+cd "$WORK/plain"
+git checkout --quiet "$BRANCH" 2>/dev/null || true
+checkn "with autocrlf off, update.sh is still LF" grep -q $'\r' update.sh
+check "with autocrlf off, update.bat is still CRLF" grep -q $'\r' update.bat
 
 cd "$ROOT"
 echo

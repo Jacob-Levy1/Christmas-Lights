@@ -9,6 +9,13 @@
 
 * text=auto eol=lf
 
+# Except Windows' own script formats.  cmd.exe can mis-parse a batch file
+# with Unix line endings -- a label or a multi-line block silently does the
+# wrong thing -- so these keep CRLF whatever the rule above says.
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.ps1     text eol=crlf
+
 # These must land byte for byte.  Git usually guesses right, but the page
 # the board serves is a gzip stream and the NeoPixel driver is compiled
 # bytecode: neither survives being treated as text, so say so rather than

@@ -26,24 +26,36 @@ tree still does something pretty when no one is holding a phone.
 
 ## Updating the tree
 
-Plug the Pico in and, from a terminal on the CIRCUITPY drive:
+Plug the Pico in and run the one for your computer, from the CIRCUITPY
+drive itself:
 
-```sh
-bash update.sh
-```
+| | |
+| --- | --- |
+| **Windows** | double-click **`update.bat`** |
+| **macOS, Linux** | `bash update.sh` |
 
 That is all it needs. It brings the drive in line with `main`, and it is
 safe to run as often as you like — when there is nothing new it says so and
-stops. Run it with `bash update.sh`, not `./update.sh`: CIRCUITPY is a FAT
-volume and cannot record the executable bit. On Windows use Git Bash, which
-comes with Git for Windows.
+stops.
 
-**The first time**, the script is not on your drive yet, so fetch it and
-run it in one go:
+`update.bat` is only a launcher: it finds the bash that comes with Git for
+Windows and hands over to `update.sh`, so there is one copy of the logic
+rather than two that can drift apart. If you cloned this repository on that
+machine you already have that bash. You can equally open Git Bash yourself
+and run `bash update.sh`.
+
+On macOS and Linux, run it with `bash update.sh` rather than `./update.sh`:
+CIRCUITPY is a FAT volume and cannot record the executable bit.
+
+**The first time**, the scripts are not on your drive yet, so fetch and run
+in one go:
 
 ```sh
 git fetch origin && git show origin/main:update.sh > update.sh && bash update.sh
 ```
+
+On Windows, run that in Git Bash; it brings `update.bat` down with
+everything else, and from then on you can just double-click it.
 
 What it does beyond `git pull`:
 
@@ -81,7 +93,9 @@ settings), `boot_out.txt` and `settings.toml`. None of them is tracked, so
 no update can delete them. `update.sh` then checks, before and after, that
 nothing in that list is about to go or has gone.
 
-`.gitattributes` forces every text file to check out with LF endings.
+`.gitattributes` forces every text file to check out with LF endings — bar
+`update.bat`, which is pinned to CRLF, because cmd.exe can mis-parse a
+batch file with Unix endings.
 Without it, Git for Windows — which sets `core.autocrlf=true` by default —
 rewrites them with CRLF, and `bash update.sh` fails on its first line with
 `$'\r': command not found`. It also marks `www/index.html.gz` and
@@ -379,6 +393,7 @@ tree will not show.
 | `snake.py` | Snake played on the board itself, with the buttons |
 | `boot.py` | Makes the flash writable when no computer is attached |
 | `update.sh` | Updates the drive from GitHub |
+| `update.bat` | The same, for Windows: finds Git Bash and runs `update.sh` |
 | `.gitignore` | Keeps the operating system's files out of git |
 | `.gitattributes` | LF line endings everywhere; marks the binaries as binary |
 | `tools/simulator.py` | Runs the whole web app on a laptop, no hardware |
