@@ -356,6 +356,60 @@ def main():
 
     call("POST", "/api/config", {"turns": 12, "start_offset": 0, "loop_counts": []})
 
+    # ------------------------------------------- the grid and the strip ---
+    # push() blanks everything outside [offset, used), so a grid cell must
+    # never hold a pixel from outside it -- anything there is lit by the
+    # page and then thrown away by the board.  The browser builds the same
+    # grid, and got this wrong: it walked the whole strip, and pixels on no
+    # loop defaulted to loop 0 and piled into the bottom row.
+    for label, patch in (
+        ("whole strip", {"num_pixels": 300, "turns": 12, "loop_counts": [], "start_offset": 0}),
+        ("spare tail", {"num_pixels": 600, "turns": 3, "loop_counts": [20, 17, 15]}),
+        ("lead-in", {"num_pixels": 300, "turns": 12, "loop_counts": [], "start_offset": 120}),
+        ("both ends", {"num_pixels": 600, "turns": 4, "loop_counts": [30, 25, 20, 15],
+                       "start_offset": 40}),
+    ):
+        call("POST", "/api/config", patch)
+        geometry = firmware.geo
+        grid = geometry.build_grid(firmware.cfg["cols"])
+        covered = set()
+        empty = 0
+        for row in grid:
+            for cell in row:
+                if not cell:
+                    empty += 1
+                covered.update(cell)
+        outside = [i for i in covered if i < geometry.offset or i >= geometry.used]
+        check(
+            "grid holds only pixels on the tree (%s)" % label,
+            not outside and not empty,
+            "%d outside [%d,%d), %d empty" % (len(outside), geometry.offset, geometry.used, empty),
+        )
+        check(
+            "grid covers the whole tree (%s)" % label,
+            len(covered) == geometry.used - geometry.offset,
+            "%d of %d" % (len(covered), geometry.used - geometry.offset),
+        )
+
+        # And a full frame really does light exactly the tree, no more.
+        call("POST", "/api/frame", bytes([60, 60, 60]) * geometry.n)
+        on = sum(1 for colour in firmware.pixels.buffer if sum(colour) > 0)
+        check(
+            "a full frame lights exactly the tree (%s)" % label,
+            on == geometry.used - geometry.offset,
+            "%d lit, %d on the tree" % (on, geometry.used - geometry.offset),
+        )
+
+    # The page needs to be able to tell you about this, so the numbers have
+    # to be in what it is given.
+    described = call("GET", "/api/geometry").data
+    check("geometry tells the page how much of the strip is in use",
+          all(key in described for key in ("n", "offset", "used")),
+          sorted(described.keys()))
+
+    call("POST", "/api/config", {"num_pixels": 300, "turns": 12, "loop_counts": [],
+                                 "start_offset": 0})
+
     # --------------------------------------------------- captive portal ---
     import captive
 

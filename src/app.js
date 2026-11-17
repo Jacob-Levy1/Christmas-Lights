@@ -132,8 +132,11 @@ const App = {
       .filter((i) => i >= this.offset && i < this.used)
       .sort((a, b) => this.cosA[a] - this.cosA[b]);
 
-    // Which loop each pixel belongs to.
-    this.loopOfPixel = new Int32Array(n);
+    // Which loop each pixel belongs to.  Lead-in and spare-tail pixels are
+    // on no loop at all and are marked -1: leaving them at 0 made them look
+    // like members of the bottom loop, which is exactly the mistake that
+    // put 548 unusable pixels into the bottom row of the game grid.
+    this.loopOfPixel = new Int32Array(n).fill(-1);
     geo.counts.forEach((count, loop) => {
       const start = geo.starts[loop];
       for (let j = 0; j < count; j++) this.loopOfPixel[start + j] = loop;
@@ -159,13 +162,20 @@ const App = {
     for (let r = 0; r < rows; r++) {
       buckets.push(Array.from({ length: cols }, () => []));
     }
+    // Walk the loops, not the whole strip: a pixel that is not on a loop is
+    // not on the tree, and the board blanks it in push().  Putting one in a
+    // cell would mean the page lights something the strip never shows.
     const pixelsInRow = Array.from({ length: rows }, () => []);
-    for (let i = 0; i < this.n; i++) {
-      const row = rowOfLoop[this.loopOfPixel[i]];
-      const col = Math.round((u[i] / 256) * cols) % cols;
-      buckets[row][col].push(i);
-      pixelsInRow[row].push(i);
-    }
+    this.geo.counts.forEach((count, loop) => {
+      const start = this.geo.starts[loop];
+      const row = rowOfLoop[loop];
+      for (let j = 0; j < count; j++) {
+        const i = start + j;
+        const col = Math.round((u[i] / 256) * cols) % cols;
+        buckets[row][col].push(i);
+        pixelsInRow[row].push(i);
+      }
+    });
 
     // The loops near the top have fewer pixels than there are columns, so
     // some cells end up with none of their own.  Borrow the nearest pixel in
@@ -553,6 +563,19 @@ const App = {
     el.className = 'status ' + (this.live ? 'live' : '');
 
     const note = document.getElementById('stageNote');
+    // Most of the strip not being on the tree is the one setting that makes
+    // everything look broken while the preview looks perfectly normal: the
+    // preview draws the tree it was told about, so 52 pixels fill the canvas
+    // exactly as 600 would.  Say so wherever you are, not just in Admin.
+    const dark = this.n - (this.used - this.offset);
+    if (dark > 0) {
+      note.textContent = 'only ' + (this.used - this.offset) + ' of ' + this.n
+        + ' pixels are set up as being on the tree — the other ' + dark
+        + ' stay dark (Admin › Tree shape)';
+      note.style.color = 'var(--gold)';
+      return;
+    }
+    note.style.color = '';
     if (!state.persisted) {
       note.textContent = 'settings apply now but cannot be saved while the USB drive is mounted';
     } else {

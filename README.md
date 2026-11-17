@@ -384,12 +384,34 @@ tree will not show.
 | `tools/simulator.py` | Runs the whole web app on a laptop, no hardware |
 | `tools/test_firmware.py` | Tests `code.py` against mock hardware |
 
+### When the tree looks dark but the page looks fine
+
+The preview draws the frame the *page* built, so it is right whatever the
+board does. If the strip disagrees, check **how much of it is set up as
+being on the tree**: `Admin › Tree shape` lists the level lengths, and the
+line under the preview says so on every tab when they do not reach the end
+of the strip.
+
+This is easy to land in. Describe a tree with the raw setup —
+`0 20l, 1 17l, 2 15l` — and then add a second reel by setting 600 pixels:
+the levels still add up to 52, so the board blanks the other 548 and the
+tree is 91 % dark, while the preview draws those 52 across the whole canvas
+and looks perfectly healthy. Press **Auto** under the loop map, or redo the
+raw setup, to spread the whole strip over the tree.
+
+`tools/test_strip.js` guards the other half of this: that the page never
+lights a pixel the board is going to blank.
+
 ### Developing without the tree
 
 ```sh
 python3 tools/build.py          # bundle the web app
 python3 tools/simulator.py      # http://localhost:8080/
 python3 tools/test_firmware.py  # checks the real code.py
+bash tools/test_update.sh       # checks update.sh against a pretend drive
+
+# and, with the simulator running and playwright on NODE_PATH:
+TREE_PASSWORD=... node tools/test_strip.js
 ```
 
 The simulator **imports the board's real `code.py`** and hands it real HTTP
