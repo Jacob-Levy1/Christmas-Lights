@@ -628,6 +628,7 @@ const Admin = {
       sta_ssid: document.getElementById('staSsid').value,
       sta_password: document.getElementById('staPassword').value,
       hostname: document.getElementById('hostname').value,
+      captive_portal: document.getElementById('captivePortal').checked,
       buttons_enabled: document.getElementById('buttonsEnabled').checked,
       button_up: document.getElementById('buttonUp').value.trim(),
       button_down: document.getElementById('buttonDown').value.trim(),
@@ -690,6 +691,29 @@ const Admin = {
     fill('staSsid', cfg.sta_ssid);
     fill('staPassword', cfg.sta_password);
     fill('hostname', cfg.hostname);
+    document.getElementById('captivePortal').checked = !!cfg.captive_portal;
+
+    const portal = state.portal || {};
+    const portalStatus = document.getElementById('portalStatus');
+    if (portal.running) {
+      portalStatus.textContent = 'Running — ' + portal.answered + ' lookup'
+        + (portal.answered === 1 ? '' : 's') + ' answered, ' + portal.satisfied
+        + ' device' + (portal.satisfied === 1 ? '' : 's') + ' let through.'
+        + ' Every address a guest types leads here.';
+      portalStatus.style.color = 'var(--green)';
+    } else if (cfg.captive_portal && cfg.wifi_mode !== 'ap') {
+      portalStatus.textContent = 'Off while the tree is on your home wifi —'
+        + ' hijacking name lookups there would be wrong. Guests reach the tree'
+        + ' at its address instead.';
+      portalStatus.style.color = '';
+    } else if (cfg.captive_portal) {
+      portalStatus.textContent = 'Switched on, but not running. Restart the tree'
+        + ' to start it.';
+      portalStatus.style.color = 'var(--gold)';
+    } else {
+      portalStatus.textContent = 'Off. Guests reach the tree by typing its address.';
+      portalStatus.style.color = '';
+    }
     document.getElementById('buttonsEnabled').checked = !!cfg.buttons_enabled;
     document.getElementById('buttonFields').hidden = !cfg.buttons_enabled;
     document.getElementById('buttonUp').value = cfg.button_up || '';

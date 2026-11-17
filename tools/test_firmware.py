@@ -356,6 +356,117 @@ def main():
 
     call("POST", "/api/config", {"turns": 12, "start_offset": 0, "loop_counts": []})
 
+    # --------------------------------------------------- captive portal ---
+    import captive
+
+    packed = captive.pack_address("192.168.4.1")
+    check("an address packs to four bytes", packed == b"\xc0\xa8\x04\x01", packed)
+    for bad_address in ("", "1.2.3", "1.2.3.4.5", "300.1.1.1", "a.b.c.d"):
+        try:
+            captive.pack_address(bad_address)
+            check("rejects the address %r" % bad_address, False)
+        except ValueError:
+            check("rejects the address %r" % bad_address, True)
+
+    def query(name, qtype=1, qclass=1, ident=b"\x12\x34", flags=b"\x01\x00"):
+        body = b""
+        for label in name.split("."):
+            body += bytes([len(label)]) + label.encode()
+        body += b"\x00" + bytes([qtype >> 8, qtype & 0xFF, qclass >> 8, qclass & 0xFF])
+        return ident + flags + b"\x00\x01\x00\x00\x00\x00\x00\x00" + body
+
+    reply = captive.build_reply(query("captive.apple.com"), packed)
+    check("a lookup is answered", reply is not None)
+    check("with the same id", reply[0:2] == b"\x12\x34", reply[0:2])
+    check("marked as an authoritative response", reply[2] & 0x84 == 0x84, hex(reply[2]))
+    check("with exactly one answer", reply[6] == 0 and reply[7] == 1, reply[6:8])
+    check("and that answer is the board", reply[-4:] == packed, reply[-4:])
+    check("the question is echoed back", query("captive.apple.com")[12:] in reply)
+
+    check("AAAA is answered with no address, so the client falls back to IPv4",
+          captive.build_reply(query("x.test", qtype=28), packed)[6:8] == b"\x00\x00")
+    check("ANY is answered", captive.build_reply(query("x.test", qtype=255), packed)[6:8] == b"\x00\x01")
+    check("MX is not given a bogus A record",
+          captive.build_reply(query("x.test", qtype=15), packed)[6:8] == b"\x00\x00")
+
+    malformed = (
+        b"", b"\x00" * 11,
+        bytes([0, 1, 0x84, 0, 0, 1, 0, 0, 0, 0, 0, 0]) + b"\x02hi\x00\x00\x01\x00\x01",
+        bytes([0, 1, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        bytes([0, 1, 0x01, 0, 0, 2, 0, 0, 0, 0, 0, 0]) + b"\x02hi\x00\x00\x01\x00\x01",
+        bytes([0, 1, 0x01, 0, 0, 1, 0, 0, 0, 0, 0, 0]) + b"\x3faaa",
+        bytes([0, 1, 0x01, 0, 0, 1, 0, 0, 0, 0, 0, 0]) + b"\x02hi\x00",
+        bytes([0, 1, 0x01, 0, 0, 1, 0, 0, 0, 0, 0, 0]) + b"\x01a" * 400,
+    )
+    refused = all(captive.build_reply(packet, packed) is None for packet in malformed)
+    check("malformed queries are refused, not answered", refused)
+
+    # Anyone within range of the hotspot can send us UDP, so this has to
+    # survive whatever arrives.
+    import random as _random
+
+    _random.seed(1234)
+    base = query("fuzz.test")
+    crashes = 0
+    for i in range(4000):
+        if i % 2:
+            packet = bytes(_random.randrange(256) for _ in range(_random.randrange(0, 80)))
+        else:
+            packet = bytearray(base)
+            for _ in range(_random.randrange(1, 6)):
+                packet[_random.randrange(len(packet))] = _random.randrange(256)
+            packet = bytes(packet)
+        try:
+            captive.build_reply(packet, packed)
+        except Exception:
+            crashes += 1
+    check("4000 fuzzed packets, no crash", crashes == 0, "%d crashes" % crashes)
+
+    # --- the probe answers, through the real routes ---
+    def probe(path, host="captive.apple.com", client="192.168.4.9"):
+        # path matters: the handler decides on it, so it has to be set here
+        # the way the real server sets it from the request line.
+        request = FakeRequest(b"", "GET", headers={"Host": host}, path=path,
+                              client_address=(client, 51000))
+        handler = firmware.server._find_handler("GET", path)
+        return handler(request) if handler else None
+
+    firmware.portal = object()  # pretend the hotspot is up
+    firmware.portal_url = "http://192.168.4.1/"
+    firmware.satisfied.clear()
+
+    for path in captive.PROBES:
+        response = probe(path)
+        check("unseen phone is sent to the tree: %s" % path,
+              response.status[0] == 302
+              and response.headers.get("Location") == "http://192.168.4.1/",
+              response.status)
+
+    check("and so is anything else they type",
+          probe("/some/page", host="example.com").status[0] == 302)
+
+    firmware.satisfied["192.168.4.9"] = firmware.time.monotonic() + 600
+    for path, (code, body, _type) in captive.PROBES.items():
+        response = probe(path)
+        check("a phone that has seen the tree is left alone: %s" % path,
+              response.status[0] == code and response.body == body,
+              "%s %r" % (response.status, response.body[:30]))
+
+    check("but browsing still lands on the tree",
+          probe("/anything", host="bbc.co.uk").status[0] == 302)
+    check("a phone from another address is still sent to the tree",
+          probe("/generate_204", client="192.168.4.77").status[0] == 302)
+
+    firmware.satisfied.clear()
+    firmware.portal = None
+    check("with the portal off, unknown paths are plain 404s",
+          probe("/generate_204").status[0] == 404)
+
+    state = call("GET", "/api/state").data
+    check("state reports the portal", "portal" in state and state["portal"]["running"] is False,
+          state.get("portal"))
+    check("the portal is a restart-level setting", "captive_portal" in tree_module.RESTART_KEYS)
+
     # ---------------------------------------------------------- buttons ---
     check("buttons off by default", not firmware.controls.active)
     check("no input queued when there are no buttons", call("GET", "/api/input").data["presses"] == [])

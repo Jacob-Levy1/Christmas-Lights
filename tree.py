@@ -90,6 +90,11 @@ DEFAULTS = {
 
     # --- networking -----------------------------------------------------
     "wifi_mode": "ap",  # "ap" = own hotspot, "sta" = join your wifi
+    # Captive portal: answer every DNS lookup with the board's own address,
+    # so whatever a guest types or taps lands on the tree, and their phone
+    # offers to open it as soon as they join.  Only ever active on the
+    # board's own hotspot -- never when it has joined a home network.
+    "captive_portal": True,
     "ap_ssid": "ChristmasTree",
     "ap_password": "jingle123",
     "sta_ssid": "",
@@ -99,6 +104,7 @@ DEFAULTS = {
 
 # Keys whose change needs the board to restart before it takes effect.
 RESTART_KEYS = (
+    "captive_portal",
     "pin",
     "order",
     "wifi_mode",
@@ -118,7 +124,8 @@ _FLOAT_KEYS = (
     "idle_brightness",
     "rotation",
 )
-_BOOL_KEYS = ("start_at_bottom", "clockwise", "idle_cycle", "buttons_enabled")
+_BOOL_KEYS = ("start_at_bottom", "clockwise", "idle_cycle", "buttons_enabled",
+              "captive_portal")
 
 #: How Snake behaves at each difficulty.  ``wrap`` means the top and bottom
 #: of the tree join up instead of being walls; ``self_collide`` means running

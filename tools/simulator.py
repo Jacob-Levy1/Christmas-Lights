@@ -54,6 +54,7 @@ def animate():
         with LOCK:
             try:
                 FIRMWARE.step(time.monotonic())
+                FIRMWARE.poll_portal()
             except Exception as err:  # pragma: no cover
                 print("render error:", err)
         time.sleep(1.0 / max(1, FIRMWARE.cfg["fps"]))
@@ -106,6 +107,7 @@ class Handler(BaseHTTPRequestHandler):
             headers={k: v for k, v in self.headers.items()},
             cookies=self.cookies(),
             path=path,
+            client_address=self.client_address,
         )
 
     def dispatch(self, method):
@@ -114,7 +116,10 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/sim/"):
             return self.simulated(path, method)
 
-        handler = FIRMWARE.server.routes.get((method, path))
+        # Go through the server's own handler lookup, not the route table,
+        # so the captive portal's catch-all is exercised here exactly as it
+        # is on the board.
+        handler = FIRMWARE.server._find_handler(method, path)
         if handler is None:
             return self.reply(404, b"no such route", "text/plain")
 
@@ -146,6 +151,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
             if path == "/api/sim/press" and method == "POST":
                 return self.sim_press()
+            if path == "/api/sim/forget":
+                # Make the board treat this client as a phone that has just
+                # joined and not yet seen the tree.
+                FIRMWARE.satisfied.clear()
+                return self.reply_json({"satisfied": len(FIRMWARE.satisfied)})
         return self.reply(404, b"no such route")
 
     def sim_press(self):

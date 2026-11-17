@@ -94,6 +94,33 @@ files onto a pretend drive and checks each is ignored and still there after
 an update, then clones the repository the way Git for Windows would and
 checks the script still runs and the gzipped page is byte-identical.
 
+## Joining the tree
+
+Join the hotspot and your phone offers to open the tree straight away, the
+way hotel wifi does. If it doesn't, open any address at all — `example.com`,
+anything you like — and you land on the tree.
+
+That works because the board answers every name lookup with its own address
+and sends every unknown URL back to its own page. The board's access point
+already tells each phone "I am your DNS server", so no setting is needed at
+either end.
+
+Once a phone has seen the tree, the board starts telling it the network is
+fine. Without that, a phone keeps warning about there being no internet and
+Android offers to drop back to mobile data, which would take it off the
+tree. Browsing anywhere still lands on the tree; only the handful of URLs
+phones use to test their connection get the reassuring answer.
+
+**The pop-up is a cut-down browser.** On iOS it has no file picker, so the
+Photo tab won't work there, and it forgets things like Simon's high score.
+It is the quickest way in; for playing properly, open `http://tree.local`
+in Safari or Chrome.
+
+This only ever runs on the tree's own hotspot. With the tree joined to your
+home wifi it stays off — hijacking name lookups on somebody's own network
+would be plain wrong — and guests reach it at its address instead. Turn it
+off entirely under **Admin → Wifi → Captive portal**.
+
 ## Signing in
 
 The tree's **setup** is behind a login; playing is not. Anyone on the
@@ -342,6 +369,7 @@ tree will not show.
 | --- | --- |
 | `code.py` | Boot, wifi, HTTP API, main loop |
 | `pwhash.py` | Salted password hashing (native hashlib, or a bundled pure-Python SHA-256) |
+| `captive.py` | The captive portal: a DNS server, and the answers phones look for |
 | `src/` | Web app sources — edit these |
 | `www/index.html.gz` | The built page, the only file the board serves |
 | `tree.py` | Config, the geometry model (per-pixel angle/height tables) and the game grid |

@@ -8,6 +8,7 @@ to be checking.  Only the hardware is pretend.
 
 import json
 import os
+import socket as _socket
 import sys
 import types
 
@@ -122,7 +123,8 @@ class FakeHeaders(dict):
 
 
 class FakeRequest:
-    def __init__(self, body=b"", method="POST", headers=None, cookies=None, path="/"):
+    def __init__(self, body=b"", method="POST", headers=None, cookies=None, path="/",
+                 client_address=("192.168.4.2", 50000)):
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode()
         if isinstance(body, str):
@@ -133,6 +135,7 @@ class FakeRequest:
         self.query_params = {}
         self.headers = FakeHeaders(headers)
         self.cookies = dict(cookies or {})
+        self.client_address = client_address
 
 
 class FakeResponse:
@@ -176,6 +179,49 @@ class FakeFileResponse(FakeResponse):
             return handle.read()
 
 
+class FakeSocketPool:
+    """Just enough of socketpool to run the real captive-portal DNS server.
+
+    These are real UDP sockets, so the simulator answers real DNS queries
+    and the tests can ask it questions with an ordinary resolver.
+    """
+
+    AF_INET = _socket.AF_INET
+    SOCK_STREAM = _socket.SOCK_STREAM
+    SOCK_DGRAM = _socket.SOCK_DGRAM
+
+    def __init__(self, radio=None):
+        self.radio = radio
+
+    def socket(self, family=_socket.AF_INET, kind=_socket.SOCK_STREAM):
+        return FakeSocket(family, kind)
+
+
+class FakeSocket:
+    def __init__(self, family, kind):
+        self._sock = _socket.socket(family, kind)
+        self._sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+
+    def bind(self, address):
+        self._sock.bind(tuple(address))
+
+    def setblocking(self, flag):
+        self._sock.setblocking(bool(flag))
+
+    def recvfrom_into(self, buffer, nbytes=None):
+        # CircuitPython's signature: fills the buffer, returns (size, address)
+        size = len(buffer) if nbytes is None else nbytes
+        data, address = self._sock.recvfrom(size)
+        buffer[: len(data)] = data
+        return len(data), address
+
+    def sendto(self, data, address):
+        return self._sock.sendto(data, tuple(address))
+
+    def close(self):
+        self._sock.close()
+
+
 class FakeServer:
     def __init__(self, pool, root_path=None, debug=False):
         self.routes = {}
@@ -189,6 +235,15 @@ class FakeServer:
             return func
 
         return decorate
+
+    def _find_handler(self, method, path):
+        """Mirror of the real server's lookup.
+
+        code.py subclasses Server to add the captive portal's catch-all and
+        calls up to this, so the stub has to offer it too -- otherwise the
+        simulator would quietly take a different path from the board.
+        """
+        return self.routes.get((method, path))
 
     def start(self, host, port=80):
         pass
@@ -227,7 +282,7 @@ def install_stubs():
     sys.modules["ipaddress"] = ipaddress
 
     socketpool = types.ModuleType("socketpool")
-    socketpool.SocketPool = lambda radio: object()
+    socketpool.SocketPool = FakeSocketPool
     sys.modules["socketpool"] = socketpool
 
     http = types.ModuleType("adafruit_httpserver")

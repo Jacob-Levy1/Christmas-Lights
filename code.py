@@ -34,6 +34,7 @@ from adafruit_httpserver import (
 )
 
 import buttons as button_driver
+import captive
 import patterns
 import pwhash
 import snake as snake_game
@@ -236,6 +237,99 @@ def connected_clients():
 
 
 # --------------------------------------------------------------------------
+# Captive portal
+# --------------------------------------------------------------------------
+portal = None          # the DNS server, once the hotspot is up
+portal_url = "/"
+#: Clients that have seen the tree.  Their phones are told the network is
+#: fine from then on, so they stop warning about no internet and stop
+#: offering to drop back to mobile data.
+satisfied = {}
+SATISFIED_FOR = 6 * 3600
+
+
+def portal_running():
+    return portal is not None
+
+
+def mark_satisfied(request):
+    if not portal_running():
+        return
+    address = request.client_address[0] if request.client_address else None
+    if not address:
+        return
+    now = time.monotonic()
+    for old_address in [a for a, until in satisfied.items() if until <= now]:
+        satisfied.pop(old_address, None)
+    while len(satisfied) >= 16:
+        satisfied.pop(min(satisfied, key=lambda a: satisfied[a]), None)
+    satisfied[address] = now + SATISFIED_FOR
+
+
+def is_satisfied(request):
+    address = request.client_address[0] if request.client_address else None
+    if not address:
+        return False
+    until = satisfied.get(address)
+    return until is not None and time.monotonic() <= until
+
+
+def is_our_host(request):
+    """Is this request addressed to the tree, or to somewhere on the web?"""
+    host = (request.headers.get("Host") or "").split(":")[0].lower()
+    if not host:
+        return True
+    return host in (network_address, cfg["hostname"].lower(),
+                    cfg["hostname"].lower() + ".local")
+
+
+def send_to_tree(request):
+    """Point a browser at the tree, wherever it thought it was going."""
+    return Response(
+        request,
+        "",
+        status=(302, "Found"),
+        headers={"Location": portal_url, "Cache-Control": "no-store"},
+    )
+
+
+def portal_fallback(request):
+    """Anything with no route of its own, once the hotspot is up."""
+    if not portal_running():
+        return Response(request, "Not found", status=(404, "Not Found"))
+
+    path = request.path
+    if captive.is_probe(path):
+        # Before a phone has seen the tree, send it here so the operating
+        # system raises its "sign in to this network" page.  Afterwards,
+        # tell it what it wants to hear so it settles down and stays put.
+        if not is_satisfied(request):
+            return send_to_tree(request)
+        code, body, content_type = captive.PROBES[path]
+        return Response(
+            request,
+            body,
+            status=(code, "OK" if code == 200 else "No Content"),
+            content_type=content_type,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    return send_to_tree(request)
+
+
+class TreeServer(Server):
+    """The HTTP server, plus a last resort that leads back to the tree."""
+
+    def _find_handler(self, method, path):
+        handler = Server._find_handler(self, method, path)
+        if handler is not None:
+            return handler
+        if method in ("GET", "HEAD"):
+            return portal_fallback
+        return None
+
+
+# --------------------------------------------------------------------------
 # Boot
 # --------------------------------------------------------------------------
 build_pixels()
@@ -283,7 +377,20 @@ def _page_etag():
 PAGE_ETAG = _page_etag()
 
 pool = socketpool.SocketPool(wifi.radio)
-server = Server(pool, None, debug=False)
+
+portal_url = "http://%s/" % network_address
+if cfg["captive_portal"] and network_mode == "ap":
+    try:
+        portal = captive.CaptiveDNS(pool, network_address)
+        print("Captive portal on: every address leads to the tree")
+    except Exception as err:
+        # Not fatal: without it people simply type the address themselves.
+        print("Captive portal unavailable (%s); the tree still works" % err)
+        portal = None
+elif cfg["captive_portal"]:
+    print("Captive portal off: only runs on the board's own hotspot")
+
+server = TreeServer(pool, None, debug=False)
 server.request_buffer_size = 2048
 # The server is synchronous: nothing is rendered while a request is being
 # served, and the stock one-second timeout means a phone that opens a
@@ -483,6 +590,11 @@ def state_payload(authed=False):
             "labels": list(button_driver.LABELS),
         },
         "onboard_game": onboard_game is not None,
+        "portal": {
+            "running": portal_running(),
+            "answered": portal.answered if portal else 0,
+            "satisfied": len(satisfied),
+        },
         "fps_actual": round(frames_per_second, 1),
     }
 
@@ -490,6 +602,16 @@ def state_payload(authed=False):
 @server.route("/")
 def route_index(request: Request):
     """The whole web app, in one compressed response."""
+    # Typed google.com and landed here?  Send them to the tree's own
+    # address, so the app always runs on one origin and the admin session
+    # cookie is not scattered across every hostname a guest tries.
+    if portal_running() and not is_our_host(request):
+        return send_to_tree(request)
+
+    # They have the page now, so their phone can stop warning about there
+    # being no internet.
+    mark_satisfied(request)
+
     # Already in the browser's cache?  Then this costs a couple of hundred
     # bytes instead of thirty kilobytes, and the strip keeps animating.
     if request.headers.get("If-None-Match") == PAGE_ETAG:
@@ -894,6 +1016,27 @@ def route_restart(request: Request):
 # --------------------------------------------------------------------------
 # Main loop
 # --------------------------------------------------------------------------
+def poll_portal(limit=4):
+    """Answer any waiting DNS queries.  Returns how many were handled.
+
+    Separated from the loop below so the simulator drives the same code
+    rather than growing its own copy of it.
+    """
+    if portal is None:
+        return 0
+    handled = 0
+    try:
+        # Drain a few at a time: several phones probing at once should not
+        # take several passes of the loop to answer.
+        for _ in range(limit):
+            if not portal.poll():
+                break
+            handled += 1
+    except Exception as err:
+        print("dns error:", err)
+    return handled
+
+
 def step(now):
     """One pass of the animation side of the main loop.
 
@@ -966,6 +1109,7 @@ def run():
             server.poll()
         except Exception as err:  # keep the lights on even if a client misbehaves
             print("server error:", err)
+        poll_portal()
         try:
             step(time.monotonic())
         except Exception as err:  # a render bug must not take the tree down
