@@ -264,7 +264,7 @@ line afterwards.
 | Tab | What it does |
 | --- | --- |
 | **Play** | Snake, Rings, Dodge, Simon |
-| **Draw** | Finger-paint straight onto the tree |
+| **Draw** | Paint light by light, on the tree unwrapped |
 | **Photo** | Put a picture on the tree |
 | **Patterns** | Pick and tune the idle show |
 | **Admin** | Shape, calibration, hardware, wifi |
@@ -304,10 +304,23 @@ arrow keys on a laptop.
 Tetris on a cylinder. Blocks fall down the tree and wrap around it; fill a
 complete ring and it clears. **▲** rotates, **▼** drops.
 
+### Drawing
+
+The drawing surface *is* the strip: the tree unwrapped, one square per
+light, one row per loop, the front of the tree down the middle and the rows
+narrowing towards the top the way the real loops do. Touch a square and
+exactly that light comes on — nothing is sampled, scaled or smoothed, so
+what you draw is what the tree shows. The brush is measured in lights, from
+one upwards.
+
 ### Photos
 
-300 pixels is a very small screen, so bold, high-contrast pictures work far
-better than detailed ones. Two ways to map one:
+Pictures go through the same grid: the photo is reduced to one colour per
+light and you see those colours, at that resolution. A few hundred lights
+is a very small screen, and it is more useful to see that honestly than to
+admire a full-resolution preview of something the tree cannot show. Bold,
+high-contrast pictures work far better than detailed ones. Two ways to map
+one:
 
 * **Front** (default) projects the picture onto the half of the tree facing
   you, *corrected for the cone*: a pixel's horizontal position on screen is

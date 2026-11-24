@@ -79,26 +79,23 @@
 
 <!-- ───────────────────────────── DRAW ───────────────────────────── -->
 <section id="tab-draw" class="tab">
-  <div class="hint">Paint with your finger. <b>Front</b> maps your drawing onto the half of the tree facing you; <b>Wrap</b> wraps it all the way round.</div>
-  <canvas id="paint" width="120" height="160"></canvas>
+  <div class="hint">This is your tree unwrapped: one square per light, the front of the tree down the middle, rows narrowing towards the top. Touch a square and exactly that light comes on.</div>
+  <canvas id="paint" class="grid"></canvas>
   <div class="row">
     <label class="swatch"><input type="color" id="brushColor" value="#ff2d2d"></label>
     <button data-brush="rainbow" id="brushRainbow">🌈</button>
     <button data-brush="erase" id="brushErase">Eraser</button>
     <button id="paintClear">Clear</button>
   </div>
-  <label class="slider">Brush size <input type="range" id="brushSize" min="1" max="20" value="6"></label>
-  <div class="row segmented" id="drawProjection">
-    <button data-proj="front" class="on">Front</button>
-    <button data-proj="wrap">Wrap</button>
-  </div>
+  <label class="slider">Brush <output id="brushOut"></output>
+    <input type="range" id="brushSize" min="1" max="6" value="2"></label>
 </section>
 
 <!-- ───────────────────────────── PHOTO ──────────────────────────── -->
 <section id="tab-photo" class="tab">
-  <div class="hint">300 pixels is a very small screen — bold, high-contrast pictures read best. The front projection corrects for the cone, so the picture looks right when you stand in front of the tree.</div>
+  <div class="hint">What you see here is what the tree will show — one square per light, nothing smoothed over. A few hundred lights is a very small screen, so bold, high-contrast pictures read best. The front projection corrects for the cone, so the picture looks right when you stand in front of the tree.</div>
   <label class="filepick">Choose a picture<input type="file" id="photoFile" accept="image/*"></label>
-  <canvas id="photo" width="120" height="160"></canvas>
+  <canvas id="photo" class="grid"></canvas>
   <div class="row segmented" id="photoProjection">
     <button data-proj="front" class="on">Front</button>
     <button data-proj="wrap">Wrap</button>

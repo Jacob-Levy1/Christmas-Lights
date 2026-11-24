@@ -143,6 +143,9 @@ const App = {
     });
 
     this.buildCells(this.state ? this.state.config.cols : 16, u);
+    // The drawing grid is one square per light, so it is rebuilt whenever
+    // the tree's shape changes.
+    if (typeof Paint !== 'undefined' && Paint.paintCanvas) Paint.relayout();
   },
 
   /* Group pixels into a rows x cols grid on the surface of the cone.

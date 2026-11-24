@@ -172,10 +172,12 @@ input[type=range]::-moz-range-thumb { width: 26px; height: 26px; border: 0; bord
 }
 
 /* ---------- draw / photo canvases ---------- */
-#paint, #photo {
-  display: block; width: 100%; max-width: 300px; margin: 10px auto;
-  aspect-ratio: 3 / 4; border: 1px solid var(--line); border-radius: 12px;
-  background: #000; image-rendering: pixelated; touch-action: none;
+/* The tree unwrapped: one square per light.  Height comes from the grid's
+   own shape, set in JS, so the squares stay square. */
+canvas.grid {
+  display: block; width: 100%; margin: 10px auto;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: #05070d; image-rendering: pixelated; touch-action: none;
 }
 
 /* ---------- patterns ---------- */

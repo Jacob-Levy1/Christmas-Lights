@@ -153,9 +153,121 @@ const GEOMETRIES = [
     await sleep(250);
   }
 
+  // ---- drawing and photos are one square per light ----
+  console.log('\n-- the drawing grid --');
   await page.evaluate(async () => {
     await App.pushConfig({ num_pixels: 300, turns: 12, loop_counts: [], start_offset: 0 });
+    await App.refresh();
   });
+  await sleep(500);
+  await page.click('#tabs button[data-tab="draw"]');
+  await sleep(500);
+
+  const grid = await page.evaluate(() => {
+    const seen = new Set();
+    let cells = 0;
+    for (const row of Grid.rows) for (const cell of row) { cells += 1; seen.add(cell.index); }
+    const outside = [...seen].filter((i) => i < App.offset || i >= App.used);
+    const rowWidths = Grid.rows.map((r) => r.length);
+    const tapering = rowWidths.every((w, k) => k === 0 || w <= rowWidths[k - 1]);
+    return { cells, distinct: seen.size, outside: outside.length, tapering,
+             rows: Grid.rows.length, loops: App.rows, onTree: App.used - App.offset };
+  });
+  check('one square per light, no light twice', grid.cells === grid.distinct,
+    grid.cells + ' squares, ' + grid.distinct + ' lights');
+  check('and every light on the tree has one', grid.distinct === grid.onTree,
+    grid.distinct + ' of ' + grid.onTree);
+  check('no square stands for a light off the tree', grid.outside === 0, grid.outside);
+  check('a row per loop, narrowing towards the top', grid.rows === grid.loops && grid.tapering,
+    grid.rows + ' rows');
+
+  // the point of the whole thing: one touch, one light
+  const tap = await page.evaluate(() => {
+    Paint.draw.size = 1;
+    Paint.pixels.fill(0);
+    const canvas = document.getElementById('paint');
+    const cell = Grid.cellSize(canvas);
+    const box = canvas.getBoundingClientRect();
+    const scale = box.width / canvas.width;
+    const hits = [];
+    for (const [row, col] of [[0, 0], [3, 5], [6, 11], [11, 4]]) {
+      if (!Grid.rows[row] || col >= Grid.rows[row].length) continue;
+      const left = Grid.rowLeft(row, cell, canvas);
+      hits.push({
+        x: box.left + (left + (col + 0.5) * cell) * scale,
+        y: box.top + (canvas.height - (row + 0.5) * cell) * scale,
+        want: Grid.rows[row][col].index,
+      });
+    }
+    return hits;
+  });
+  for (const hit of tap) {
+    await page.evaluate(() => Paint.pixels.fill(0));
+    await page.mouse.move(hit.x, hit.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await sleep(120);
+    const result = await page.evaluate((want) => {
+      const on = [];
+      for (let i = 0; i < App.n; i++) {
+        if (Paint.pixels[i * 3] + Paint.pixels[i * 3 + 1] + Paint.pixels[i * 3 + 2] > 0) on.push(i);
+      }
+      return { on, want };
+    }, hit.want);
+    check('one touch lights exactly one light (' + hit.want + ')',
+      result.on.length === 1 && result.on[0] === hit.want,
+      result.on.length + ' lit: ' + result.on.slice(0, 5));
+  }
+
+  // what is drawn is what is sent
+  await sleep(500);
+  const drawn = await page.evaluate(async () => {
+    const d = await (await fetch('/api/sim/frame')).json();
+    let differs = 0;
+    for (let i = 0; i < App.n * 3; i++) {
+      if (parseInt(d.hex.substr(i * 2, 2), 16) !== Paint.pixels[i]) differs++;
+    }
+    return differs;
+  });
+  check('the strip shows the drawing byte for byte', drawn === 0, drawn + ' bytes differ');
+
+  // ---- the photo preview is the lights themselves ----
+  console.log('\n-- the photo grid --');
+  await page.click('#tabs button[data-tab="photo"]');
+  await sleep(400);
+  await page.evaluate(async () => {
+    const c = document.createElement('canvas');
+    c.width = 120; c.height = 160;
+    const x = c.getContext('2d');
+    const g = x.createLinearGradient(0, 0, 0, 160);
+    g.addColorStop(0, '#ffd24a'); g.addColorStop(1, '#2b5cff');
+    x.fillStyle = g; x.fillRect(0, 0, 120, 160);
+    x.fillStyle = '#fff'; x.beginPath(); x.arc(60, 60, 25, 0, 7); x.fill();
+    const img = new Image();
+    await new Promise((r) => { img.onload = r; img.src = c.toDataURL(); });
+    Paint.photo.image = img;
+    Paint.renderSource();
+    Paint.samplePhoto();
+    Paint.startPhoto();
+  });
+  await sleep(900);
+  const photo = await page.evaluate(async () => {
+    const d = await (await fetch('/api/sim/frame')).json();
+    let differs = 0, lit = 0;
+    for (let i = 0; i < App.n; i++) {
+      for (let k = 0; k < 3; k++) {
+        if (parseInt(d.hex.substr(i * 6 + k * 2, 2), 16) !== Paint.photoPixels[i * 3 + k]) differs++;
+      }
+      if (Paint.photoPixels[i * 3] + Paint.photoPixels[i * 3 + 1] + Paint.photoPixels[i * 3 + 2] > 0) lit++;
+    }
+    return { differs, lit, samples: Paint.photoPixels.length / 3 };
+  });
+  check('the picture is reduced to one colour per light', photo.lit > 0,
+    photo.lit + ' of ' + photo.samples + ' lit');
+  check('and the strip shows exactly that', photo.differs === 0, photo.differs + ' bytes differ');
+  await page.click('#photoStop');
+  await sleep(300);
+
   check('no javascript errors', errors.length === 0, errors.slice(0, 3).join(' | '));
   await browser.close();
   console.log(fails ? '\n' + fails + ' FAILURES' : '\nall strip checks passed');
