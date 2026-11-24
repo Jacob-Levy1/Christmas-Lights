@@ -40,24 +40,38 @@ const Grid = {
     return this;
   },
 
-  /* Size the canvas to the grid's own shape, at the screen's resolution. */
-  fit(canvas) {
+  /* The square size, in screen pixels, that would fit the whole tree in. */
+  baseCell(canvas) {
+    const wrap = canvas.parentElement;
+    const available = (wrap && wrap.clientWidth) || canvas.clientWidth || 300;
+    return Math.max(3, Math.floor(available / this.widest));
+  },
+
+  /* Zoom that makes a square big enough to hit with a finger. */
+  comfortable(canvas, wanted) {
+    const base = this.baseCell(canvas);
+    return Math.max(1, Math.min(8, (wanted || 24) / base));
+  },
+
+  /* Size the canvas to the grid's shape at this zoom.  Past 1x it is wider
+   * than the space it sits in, and the wrapper scrolls. */
+  fit(canvas, zoom) {
     const ratio = Math.min(2, window.devicePixelRatio || 1);
-    const width = canvas.clientWidth || canvas.parentElement.clientWidth || 300;
-    const cell = Math.max(3, Math.floor((width * ratio) / this.widest));
-    canvas.width = cell * this.widest;
-    canvas.height = cell * this.rows.length;
-    canvas.style.height = Math.round(canvas.height / ratio) + 'px';
+    const cell = Math.max(3, Math.round(this.baseCell(canvas) * (zoom || 1)));
+    canvas.style.width = cell * this.widest + 'px';
+    canvas.style.height = cell * this.rows.length + 'px';
+    canvas.width = cell * this.widest * ratio;
+    canvas.height = cell * this.rows.length * ratio;
     return cell;
   },
 
   cellSize(canvas) {
-    return Math.max(1, Math.floor(canvas.width / this.widest));
+    return Math.max(1, canvas.width / this.widest);
   },
 
   /* Where a row starts, so each row is centred on the front of the tree. */
   rowLeft(row, cell, canvas) {
-    return Math.round((canvas.width - this.rows[row].length * cell) / 2);
+    return (canvas.width - this.rows[row].length * cell) / 2;
   },
 
   /* Which light is under a touch, or null. */
@@ -112,7 +126,9 @@ const Grid = {
     ctx.fillStyle = '#05070d';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const gap = cell > 6 ? 1 : 0;
+    // A visible gutter once the squares are big enough to show one, so you
+    // can see where one light ends and the next begins.
+    const gap = cell > 14 ? 2 : cell > 6 ? 1 : 0;
     for (let row = 0; row < this.rows.length; row++) {
       const left = this.rowLeft(row, cell, canvas);
       const y = canvas.height - (row + 1) * cell;
@@ -120,14 +136,15 @@ const Grid = {
         const at = this.rows[row][col].index * 3;
         const r = frame[at], g = frame[at + 1], b = frame[at + 2];
         ctx.fillStyle = (r + g + b) === 0 ? '#121a2b' : `rgb(${r},${g},${b})`;
-        ctx.fillRect(left + col * cell, y, cell - gap, cell - gap);
+        ctx.fillRect(Math.round(left + col * cell), Math.round(y),
+                     Math.ceil(cell - gap), Math.ceil(cell - gap));
       }
     }
   },
 };
 
 const Paint = {
-  draw: { brush: 'color', size: 2, color: '#ff2d2d' },
+  draw: { brush: 'color', size: 2, color: '#ff2d2d', zoom: 1, mode: 'draw' },
   photo: {
     projection: 'front', fit: 'cover', image: null,
     brightness: 105, contrast: 135, saturation: 165, spin: 0, offset: 0, turn: 0,
@@ -149,12 +166,14 @@ const Paint = {
     this.wirePhoto();
     this.relayout();
 
+    // A tab that has just been shown can be measured; one that is hidden
+    // cannot, which is why the sizing waits for this rather than happening
+    // once at startup.
     document.getElementById('tabs').addEventListener('click', (event) => {
       const button = event.target.closest('button[data-tab]');
       if (!button) return;
-      if (button.dataset.tab === 'draw' || button.dataset.tab === 'photo') {
-        this.relayout();
-      }
+      if (button.dataset.tab === 'draw') this.layoutDraw();
+      if (button.dataset.tab === 'photo') this.layoutPhoto();
     });
   },
 
@@ -163,13 +182,60 @@ const Paint = {
     Grid.build();
     if (this.pixels.length !== App.n * 3) this.pixels = new Uint8Array(App.n * 3);
     if (this.photoPixels.length !== App.n * 3) this.photoPixels = new Uint8Array(App.n * 3);
-    Grid.fit(this.paintCanvas);
-    Grid.fit(this.photoCanvas);
-    Grid.render(this.paintCanvas, this.pixels);
-    if (this.photo.image) this.samplePhoto(); else Grid.render(this.photoCanvas, this.photoPixels);
+    this.layoutDraw();
+    this.layoutPhoto();
+
     const size = document.getElementById('brushSize');
     document.getElementById('brushOut').textContent =
       size.value === '1' ? 'one light' : size.value + ' lights across';
+  },
+
+  /* Size the drawing grid.  A hidden tab measures zero, so this does
+   * nothing until the tab is actually on screen -- the first attempt
+   * happens at startup, when Play is showing and this one is not. */
+  layoutDraw() {
+    const wrap = document.getElementById('paintWrap');
+    if (!wrap || !wrap.clientWidth) return false;
+
+    const firstTime = !this.drawSized;
+    this.drawSized = true;
+    if (firstTime) {
+      // Start close enough in to actually hit a square: the whole tree
+      // across a phone leaves them about nine pixels wide.
+      this.draw.zoom = Grid.comfortable(this.paintCanvas, 26);
+      document.getElementById('zoomLevel').value = Math.round(this.draw.zoom * 100);
+    }
+    this.applyZoom(firstTime);
+    return true;
+  },
+
+  layoutPhoto() {
+    const wrap = this.photoCanvas.parentElement;
+    if (!wrap || !wrap.clientWidth) return false;
+    Grid.fit(this.photoCanvas, 1);
+    if (this.photo.image) this.samplePhoto();
+    else Grid.render(this.photoCanvas, this.photoPixels);
+    return true;
+  },
+
+  /* Resize the drawing canvas, keeping whatever was in the middle there.
+   * Zoomed in, the front of the tree is what you want in view, so the
+   * first look starts centred on it rather than at the back-left edge. */
+  applyZoom(centreOnFront) {
+    const wrap = document.getElementById('paintWrap');
+    const canvas = this.paintCanvas;
+    const was = wrap.scrollWidth > wrap.clientWidth
+      ? (wrap.scrollLeft + wrap.clientWidth / 2) / wrap.scrollWidth
+      : 0.5;
+
+    const cell = Grid.fit(canvas, this.draw.zoom);
+    Grid.render(canvas, this.pixels);
+
+    const middle = centreOnFront ? 0.5 : was;
+    wrap.scrollLeft = Math.max(0, middle * wrap.scrollWidth - wrap.clientWidth / 2);
+
+    const out = document.getElementById('zoomOut');
+    if (out) out.textContent = cell + ' px a light';
   },
 
   /* ───────────────────────── drawing ───────────────────────── */
@@ -179,6 +245,7 @@ const Paint = {
     let hue = 0;
 
     const stroke = (event) => {
+      if (this.draw.mode !== 'draw') return;
       const spot = Grid.cellAt(canvas, event.clientX, event.clientY);
       if (!spot) return;
       let colour;
@@ -204,6 +271,7 @@ const Paint = {
     };
 
     canvas.addEventListener('pointerdown', (event) => {
+      if (this.draw.mode !== 'draw') return;
       event.preventDefault();
       drawing = true;
       canvas.setPointerCapture(event.pointerId);
@@ -231,6 +299,28 @@ const Paint = {
       document.getElementById('brushOut').textContent =
         this.draw.size === 1 ? 'one light' : this.draw.size + ' lights across';
     });
+    document.getElementById('zoomLevel').addEventListener('input', (event) => {
+      this.draw.zoom = Number(event.target.value) / 100;
+      this.applyZoom(false);
+    });
+    document.getElementById('zoomFit').addEventListener('click', () => {
+      this.draw.zoom = 1;
+      document.getElementById('zoomLevel').value = 100;
+      this.applyZoom(false);
+    });
+
+    document.getElementById('paintMode').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-mode]');
+      if (!button) return;
+      this.draw.mode = button.dataset.mode;
+      document.querySelectorAll('#paintMode button').forEach((b) => {
+        b.classList.toggle('on', b === button);
+      });
+      // In move mode the browser does the scrolling, which it will only do
+      // if we stop claiming the touch for drawing.
+      document.getElementById('paintWrap').classList.toggle('move', this.draw.mode === 'move');
+    });
+
     document.getElementById('paintClear').addEventListener('click', () => {
       this.pixels.fill(0);
       Grid.render(this.paintCanvas, this.pixels);

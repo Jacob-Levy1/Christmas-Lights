@@ -80,8 +80,15 @@
 <!-- ───────────────────────────── DRAW ───────────────────────────── -->
 <section id="tab-draw" class="tab">
   <div class="hint">This is your tree unwrapped: one square per light, the front of the tree down the middle, rows narrowing towards the top. Touch a square and exactly that light comes on.</div>
-  <canvas id="paint" class="grid"></canvas>
+  <div class="gridwrap" id="paintWrap"><canvas id="paint" class="grid"></canvas></div>
+  <div class="row segmented" id="paintMode">
+    <button data-mode="draw" class="on">✏️ Draw</button>
+    <button data-mode="move">✋ Move</button>
+  </div>
+  <label class="slider">Zoom <output id="zoomOut"></output>
+    <input type="range" id="zoomLevel" min="100" max="800" step="10" value="100"></label>
   <div class="row">
+    <button id="zoomFit">Whole tree</button>
     <label class="swatch"><input type="color" id="brushColor" value="#ff2d2d"></label>
     <button data-brush="rainbow" id="brushRainbow">🌈</button>
     <button data-brush="erase" id="brushErase">Eraser</button>
@@ -95,7 +102,7 @@
 <section id="tab-photo" class="tab">
   <div class="hint">What you see here is what the tree will show — one square per light, nothing smoothed over. A few hundred lights is a very small screen, so bold, high-contrast pictures read best. The front projection corrects for the cone, so the picture looks right when you stand in front of the tree.</div>
   <label class="filepick">Choose a picture<input type="file" id="photoFile" accept="image/*"></label>
-  <canvas id="photo" class="grid"></canvas>
+  <div class="gridwrap"><canvas id="photo" class="grid"></canvas></div>
   <div class="row segmented" id="photoProjection">
     <button data-proj="front" class="on">Front</button>
     <button data-proj="wrap">Wrap</button>

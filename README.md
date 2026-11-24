@@ -313,6 +313,11 @@ exactly that light comes on — nothing is sampled, scaled or smoothed, so
 what you draw is what the tree shows. The brush is measured in lights, from
 one upwards.
 
+A whole tree across a phone leaves the squares about nine pixels wide, so
+it opens zoomed in — around twenty-six pixels a square — and centred on the
+front of the tree. **Zoom** changes that, **Whole tree** fits it all back on
+screen, and **✋ Move** lets you drag the view about without drawing on it.
+
 ### Photos
 
 Pictures go through the same grid: the photo is reduced to one colour per

@@ -172,13 +172,22 @@ input[type=range]::-moz-range-thumb { width: 26px; height: 26px; border: 0; bord
 }
 
 /* ---------- draw / photo canvases ---------- */
-/* The tree unwrapped: one square per light.  Height comes from the grid's
-   own shape, set in JS, so the squares stay square. */
-canvas.grid {
-  display: block; width: 100%; margin: 10px auto;
+/* The tree unwrapped: one square per light.  Zoomed in the canvas is wider
+   than the screen, so it sits in a box that scrolls. */
+.gridwrap {
+  margin: 10px 0; overflow: auto; max-height: 56vh;
   border: 1px solid var(--line); border-radius: 10px;
-  background: #05070d; image-rendering: pixelated; touch-action: none;
+  background: #05070d; -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
+canvas.grid {
+  display: block; margin: 0 auto;
+  image-rendering: pixelated;
+  /* Drawing claims the touch; Move hands it back so the box can scroll. */
+  touch-action: none;
+}
+.gridwrap.move { cursor: grab; }
+.gridwrap.move canvas.grid { touch-action: pan-x pan-y; }
 
 /* ---------- patterns ---------- */
 .pattern-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

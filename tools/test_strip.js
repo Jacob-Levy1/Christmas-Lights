@@ -181,43 +181,149 @@ const GEOMETRIES = [
   check('a row per loop, narrowing towards the top', grid.rows === grid.loops && grid.tapering,
     grid.rows + ' rows');
 
-  // the point of the whole thing: one touch, one light
-  const tap = await page.evaluate(() => {
-    Paint.draw.size = 1;
-    Paint.pixels.fill(0);
-    const canvas = document.getElementById('paint');
-    const cell = Grid.cellSize(canvas);
-    const box = canvas.getBoundingClientRect();
-    const scale = box.width / canvas.width;
-    const hits = [];
-    for (const [row, col] of [[0, 0], [3, 5], [6, 11], [11, 4]]) {
-      if (!Grid.rows[row] || col >= Grid.rows[row].length) continue;
-      const left = Grid.rowLeft(row, cell, canvas);
-      hits.push({
-        x: box.left + (left + (col + 0.5) * cell) * scale,
-        y: box.top + (canvas.height - (row + 0.5) * cell) * scale,
-        want: Grid.rows[row][col].index,
-      });
-    }
-    return hits;
-  });
-  for (const hit of tap) {
-    await page.evaluate(() => Paint.pixels.fill(0));
-    await page.mouse.move(hit.x, hit.y);
+  // The point of the whole thing: one touch, one light.  Zoomed in, most of
+  // the tree is off screen, so each target is scrolled into view first --
+  // which is what a person does too.
+  for (const [row, col] of [[0, 0], [3, 5], [6, 11], [11, 4]]) {
+    const aim = await page.evaluate(([row, col]) => {
+      if (!Grid.rows[row] || col >= Grid.rows[row].length) return null;
+      Paint.draw.size = 1;
+      Paint.pixels.fill(0);
+      const wrap = document.getElementById('paintWrap');
+      const canvas = document.getElementById('paint');
+      const cell = Grid.cellSize(canvas);
+      const ratio = canvas.getBoundingClientRect().width / canvas.width;
+      // centre of that square, in the canvas's own CSS pixels
+      const cx = (Grid.rowLeft(row, cell, canvas) + (col + 0.5) * cell) * ratio;
+      const cy = (canvas.height - (row + 0.5) * cell) * ratio;
+      wrap.scrollLeft = cx - wrap.clientWidth / 2;
+      wrap.scrollTop = cy - wrap.clientHeight / 2;
+      const box = canvas.getBoundingClientRect();
+      return { x: box.left + cx, y: box.top + cy, want: Grid.rows[row][col].index };
+    }, [row, col]);
+    if (!aim) continue;
+    await sleep(120);
+    await page.mouse.move(aim.x, aim.y);
     await page.mouse.down();
     await page.mouse.up();
-    await sleep(120);
-    const result = await page.evaluate((want) => {
+    await sleep(140);
+    const result = await page.evaluate(() => {
       const on = [];
       for (let i = 0; i < App.n; i++) {
         if (Paint.pixels[i * 3] + Paint.pixels[i * 3 + 1] + Paint.pixels[i * 3 + 2] > 0) on.push(i);
       }
-      return { on, want };
-    }, hit.want);
-    check('one touch lights exactly one light (' + hit.want + ')',
-      result.on.length === 1 && result.on[0] === hit.want,
-      result.on.length + ' lit: ' + result.on.slice(0, 5));
+      return on;
+    });
+    check('one touch lights exactly one light (' + aim.want + ')',
+      result.length === 1 && result[0] === aim.want,
+      result.length + ' lit: ' + result.slice(0, 5));
   }
+
+  // ---- the squares have to be big enough to actually hit ----
+  const view = await page.evaluate(() => {
+    const wrap = document.getElementById('paintWrap');
+    const canvas = document.getElementById('paint');
+    const ratio = Math.min(2, window.devicePixelRatio || 1);
+    return {
+      square: Math.round(Grid.cellSize(canvas) / ratio),
+      window: wrap.clientWidth,
+      scrollWidth: wrap.scrollWidth,
+      scrollLeft: wrap.scrollLeft,
+      readout: document.getElementById('zoomOut').textContent,
+    };
+  });
+  check('opens with squares big enough for a finger', view.square >= 20,
+    view.square + ' px a square');
+  check('and says how big they are', /px a light/.test(view.readout), view.readout);
+  check('zoomed in, the view starts on the front of the tree',
+    Math.abs((view.scrollLeft + view.window / 2) - view.scrollWidth / 2) < 16,
+    'centre at ' + Math.round(view.scrollLeft + view.window / 2) + ' of ' + view.scrollWidth);
+
+  // a touch has to land on the right light at any zoom, not just the default
+  for (const zoom of [100, 250, 600]) {
+    await page.evaluate((z) => {
+      const slider = document.getElementById('zoomLevel');
+      slider.value = z;
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      Paint.draw.size = 1;
+      Paint.pixels.fill(0);
+    }, zoom);
+    await sleep(300);
+    // whatever square is under the middle of the visible window
+    const aim = await page.evaluate(() => {
+      const wrap = document.getElementById('paintWrap');
+      const box = wrap.getBoundingClientRect();
+      const x = box.left + box.width / 2;
+      const y = box.top + Math.min(box.height, wrap.scrollHeight) / 2;
+      const spot = Grid.cellAt(document.getElementById('paint'), x, y);
+      return { x, y, want: Grid.rows[spot.row][spot.col].index };
+    });
+    await page.mouse.move(aim.x, aim.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await sleep(200);
+    const hit = await page.evaluate(() => {
+      const on = [];
+      for (let i = 0; i < App.n; i++) {
+        if (Paint.pixels[i * 3] + Paint.pixels[i * 3 + 1] + Paint.pixels[i * 3 + 2] > 0) on.push(i);
+      }
+      return on;
+    });
+    check('a touch at ' + zoom + '% lights the one square under it',
+      hit.length === 1 && hit[0] === aim.want, hit.length + ' lit, wanted ' + aim.want);
+  }
+
+  // the whole tree still fits when asked for
+  await page.click('#zoomFit');
+  await sleep(300);
+  const whole = await page.evaluate(() => {
+    const wrap = document.getElementById('paintWrap');
+    return { fits: wrap.scrollWidth <= wrap.clientWidth + 2,
+             square: Math.round(Grid.cellSize(document.getElementById('paint'))
+                                / Math.min(2, window.devicePixelRatio || 1)) };
+  });
+  check('"Whole tree" fits it all on screen', whole.fits, whole.square + ' px a square');
+
+  // Move mode has to hand the touch back, or the box cannot be scrolled
+  await page.click('#paintMode button[data-mode="move"]');
+  await sleep(200);
+  const moving = await page.evaluate(() => ({
+    touch: getComputedStyle(document.getElementById('paint')).touchAction,
+    marked: document.getElementById('paintWrap').classList.contains('move'),
+  }));
+  check('Move hands the touch back to the browser so it can scroll',
+    moving.marked && moving.touch !== 'none', JSON.stringify(moving));
+
+  const movedPixels = await page.evaluate(async () => {
+    const before = Paint.pixels.slice();
+    const wrap = document.getElementById('paintWrap');
+    const box = wrap.getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2,
+             sum: before.reduce((a, b) => a + b, 0) };
+  });
+  await page.mouse.move(movedPixels.x, movedPixels.y);
+  await page.mouse.down();
+  await page.mouse.move(movedPixels.x - 40, movedPixels.y);
+  await page.mouse.up();
+  await sleep(200);
+  check('and dragging in Move mode does not draw',
+    await page.evaluate((was) => Paint.pixels.reduce((a, b) => a + b, 0) === was,
+      movedPixels.sum), '');
+  await page.click('#paintMode button[data-mode="draw"]');
+  await sleep(200);
+
+  // put a stroke back for the checks below
+  await page.evaluate(() => {
+    Paint.pixels.fill(0);
+    for (const cell of Grid.rows[2]) {
+      const at = cell.index * 3;
+      Paint.pixels[at] = 200; Paint.pixels[at + 1] = 40; Paint.pixels[at + 2] = 90;
+    }
+    Grid.render(document.getElementById('paint'), Paint.pixels);
+    Paint.startDraw();
+    App.dirty = true;
+  });
+  await sleep(500);
 
   // what is drawn is what is sent
   await sleep(500);
