@@ -88,6 +88,15 @@ DEFAULTS = {
     "admin_hash": "289343372c075230e0cfd5c7b6083c5439399cd92193c200fd910452c344f9e3",
     "admin_rounds": 150,
 
+    # --- quiet hours ----------------------------------------------------
+    # The board has no battery-backed clock: on power-up it has no idea what
+    # time it is, and is told by the first browser that talks to it.  Until
+    # then quiet hours are not applied, so a tree is never dark all evening
+    # because it thinks it is the middle of the night.
+    "quiet_enabled": True,
+    "quiet_from": 22 * 60,  # 22:00
+    "quiet_to": 6 * 60,     # 06:00
+
     # --- networking -----------------------------------------------------
     "wifi_mode": "ap",  # "ap" = own hotspot, "sta" = join your wifi
     # Captive portal: answer every DNS lookup with the board's own address,
@@ -116,7 +125,7 @@ RESTART_KEYS = (
 )
 
 _INT_KEYS = ("num_pixels", "turns", "fps", "cols", "idle_cycle_secs", "start_offset",
-             "admin_rounds")
+             "admin_rounds", "quiet_from", "quiet_to")
 _FLOAT_KEYS = (
     "top_ratio",
     "brightness",
@@ -125,7 +134,21 @@ _FLOAT_KEYS = (
     "rotation",
 )
 _BOOL_KEYS = ("start_at_bottom", "clockwise", "idle_cycle", "buttons_enabled",
-              "captive_portal")
+              "captive_portal", "quiet_enabled")
+
+def in_quiet_hours(minutes, start, end):
+    """Is ``minutes`` inside the quiet window?
+
+    The window usually runs past midnight -- 22:00 to 06:00 -- so it is the
+    two ends of the day rather than a stretch in the middle.  Equal ends
+    mean no quiet time at all, rather than the whole day.
+    """
+    if start == end:
+        return False
+    if start < end:
+        return start <= minutes < end
+    return minutes >= start or minutes < end
+
 
 #: How Snake behaves at each difficulty.  ``wrap`` means the top and bottom
 #: of the tree join up instead of being walls; ``self_collide`` means running
@@ -162,6 +185,8 @@ _LIMITS = {
     "num_pixels": (1, 1200),
     "start_offset": (0, 1199),
     "admin_rounds": (1, 500000),
+    "quiet_from": (0, 1439),
+    "quiet_to": (0, 1439),
     "turns": (1, 64),
     "fps": (1, 60),
     "cols": (4, 48),

@@ -492,6 +492,42 @@ const Admin = {
       document.getElementById('buttonFields').hidden = !buttonsEnabled.checked;
     });
 
+    // --- quiet hours -------------------------------------------------
+    const quietEnabled = document.getElementById('quietEnabled');
+    const quietFrom = document.getElementById('quietFrom');
+    const quietTo = document.getElementById('quietTo');
+
+    const saveQuiet = debounce(() => {
+      const from = parseMinutes(quietFrom.value);
+      const to = parseMinutes(quietTo.value);
+      if (from === null || to === null) {
+        App.toast('those times do not look right', true);
+        return;
+      }
+      App.pushConfig({ quiet_enabled: quietEnabled.checked, quiet_from: from, quiet_to: to })
+        .then(() => this.renderClock())
+        .catch(() => App.toast('could not save the quiet hours', true));
+    }, 400);
+
+    quietEnabled.addEventListener('change', () => {
+      document.getElementById('quietFields').hidden = !quietEnabled.checked;
+      saveQuiet();
+    });
+    quietFrom.addEventListener('change', saveQuiet);
+    quietTo.addEventListener('change', saveQuiet);
+
+    document.getElementById('clockSet').addEventListener('click', async () => {
+      const now = new Date();
+      try {
+        await App.post('/api/time', { minutes: now.getHours() * 60 + now.getMinutes() });
+        await App.refresh();
+        this.renderClock();
+        App.toast('the tree knows the time now');
+      } catch (err) {
+        App.toast('could not set the time', true);
+      }
+    });
+
     ['apSsid', 'apPassword', 'staSsid', 'staPassword', 'hostname'].forEach((id) => {
       const field = document.getElementById(id);
       field.addEventListener('input', () => { field.dataset.edited = '1'; });
@@ -746,6 +782,7 @@ const Admin = {
 
     this.renderLoopMap();
     this.renderCalibration();
+    this.renderClock();
     this.renderInfo(state);
 
     // Only refill the raw box when it is empty or already matches, so a
@@ -853,6 +890,38 @@ const Admin = {
     } catch (err) {
       App.toast('could not apply the raw setup', true);
     }
+  },
+
+  /* What the tree thinks the time is, and what it will do about it. */
+  renderClock() {
+    const clock = (App.state && App.state.clock) || {};
+    const status = document.getElementById('clockStatus');
+    const enabled = document.getElementById('quietEnabled');
+    const from = document.getElementById('quietFrom');
+    const to = document.getElementById('quietTo');
+
+    if (document.activeElement !== enabled) enabled.checked = !!clock.enabled;
+    if (document.activeElement !== from) from.value = formatMinutes(clock.from);
+    if (document.activeElement !== to) to.value = formatMinutes(clock.to);
+    document.getElementById('quietFields').hidden = !clock.enabled;
+
+    if (!clock.known) {
+      status.textContent = 'The tree does not know the time yet, so it will not'
+        + ' sleep. Open this page on a phone, or press the button below.';
+      status.className = 'rawstatus bad';
+      return;
+    }
+    if (!clock.enabled) {
+      status.textContent = 'The tree thinks it is ' + formatMinutes(clock.minutes)
+        + '. It will stay on all night.';
+      status.className = 'rawstatus';
+      return;
+    }
+    status.textContent = 'The tree thinks it is ' + formatMinutes(clock.minutes) + '. '
+      + (clock.quiet
+        ? 'Asleep now, back on at ' + formatMinutes(clock.to) + '.'
+        : 'Awake, off at ' + formatMinutes(clock.from) + '.');
+    status.className = 'rawstatus ' + (clock.quiet ? '' : 'good');
   },
 
   renderLoopMap() {

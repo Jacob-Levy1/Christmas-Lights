@@ -356,6 +356,97 @@ def main():
 
     call("POST", "/api/config", {"turns": 12, "start_offset": 0, "loop_counts": []})
 
+    # --------------------------------------------------- quiet hours ---
+    # The window runs past midnight, which is the case worth being sure of.
+    for start, end, label, expected in (
+        (22 * 60, 6 * 60, "22:00-06:00",
+         {8 * 60: False, 21 * 60: False, 22 * 60: True, 2 * 60: True,
+          5 * 60 + 59: True, 6 * 60: False}),
+        (9 * 60, 17 * 60, "09:00-17:00",
+         {8 * 60: False, 12 * 60: True, 17 * 60: False, 2 * 60: False}),
+        (0, 0, "off", {0: False, 12 * 60: False, 23 * 60: False}),
+    ):
+        wrong = [m for m, want in expected.items()
+                 if tree_module.in_quiet_hours(m, start, end) != want]
+        check("quiet window %s" % label, not wrong,
+              "wrong at %s" % [("%02d:%02d" % (m // 60, m % 60)) for m in wrong])
+
+    check("the board starts not knowing the time",
+          call("GET", "/api/state").data["clock"]["known"] is False)
+    check("and so does not sleep", firmware.quiet_now() is False)
+
+    # Anyone may set it: the board cannot know on its own, and the first
+    # phone to open the page after a power cut should just put it right.
+    reply = firmware.server.routes[("POST", "/api/time")](
+        FakeRequest({"minutes": 23 * 60 + 30}, "POST")
+    )
+    check("a guest may tell it the time", reply.status[0] == 200, reply.status)
+    check("and it believes them", firmware.now_minutes() == 23 * 60 + 30,
+          firmware.now_minutes())
+    check("nonsense is refused",
+          firmware.server.routes[("POST", "/api/time")](
+              FakeRequest({"minutes": "half past"}, "POST")).status[0] == 400)
+
+    check("it knows it is quiet now", firmware.quiet_now() is True)
+
+    # The idle show stops; the strip goes dark and stays dark.
+    firmware.mode = "idle"
+    firmware.quiet_blanked = False
+    firmware.show.set_pattern("solid", 0.0)
+    firmware.last_render_at = 0
+    firmware.step(8000.0)
+    check("the tree turns itself off during quiet hours",
+          not any(sum(colour) for colour in firmware.pixels.buffer),
+          "%d lit" % sum(1 for c in firmware.pixels.buffer if sum(c) > 0))
+    shows = firmware.pixels.shows
+    firmware.last_render_at = 0
+    firmware.step(8001.0)
+    check("and does not keep rewriting the strip", firmware.pixels.shows == shows,
+          "%d extra writes" % (firmware.pixels.shows - shows))
+
+    # The page reads the frame buffer, so it has to agree with the strip --
+    # otherwise the preview animates a tree that is actually dark.
+    readback = call("GET", "/api/frame").data["hex"]
+    check("the page is told the tree is dark, not left showing the old frame",
+          set(readback) == {"0"}, readback[:32])
+
+    # ...but somebody who turns up and plays still gets lights.
+    call("POST", "/api/frame", bytes([80, 80, 80]) * firmware.geo.n)
+    check("a phone can still light it during quiet hours",
+          sum(1 for c in firmware.pixels.buffer if sum(c) > 0) > 0)
+    firmware.step(firmware.last_frame_at + firmware.LIVE_TIMEOUT + 1)
+    firmware.last_render_at = 0
+    firmware.step(8100.0)
+    check("and it goes dark again when they stop",
+          not any(sum(colour) for colour in firmware.pixels.buffer))
+
+    # Morning.
+    firmware.set_clock(9 * 60)
+    check("awake again in the morning", firmware.quiet_now() is False)
+    firmware.mode = "idle"
+    firmware.last_render_at = 0
+    firmware.step(8200.0)
+    check("and the idle show comes back",
+          sum(1 for c in firmware.pixels.buffer if sum(c) > 0) > 0)
+
+    # When should be an admin decision, even though what time it is is not.
+    check("a guest cannot change when it sleeps",
+          call("POST", "/api/config", {"quiet_from": 60}, auth=False).status[0] == 401)
+    state = call("POST", "/api/config", {"quiet_enabled": True, "quiet_from": 20 * 60,
+                                         "quiet_to": 7 * 60}).data
+    check("an admin can", state["config"]["quiet_from"] == 20 * 60,
+          state["config"]["quiet_from"])
+    check("and it is reported back", call("GET", "/api/state").data["clock"]["from"] == 20 * 60)
+
+    # Switched off, the time no longer matters.
+    call("POST", "/api/config", {"quiet_enabled": False})
+    firmware.set_clock(2 * 60)
+    check("with quiet hours off it stays awake at 02:00", firmware.quiet_now() is False)
+    call("POST", "/api/config", {"quiet_enabled": True, "quiet_from": 22 * 60,
+                                 "quiet_to": 6 * 60})
+    firmware.set_clock(12 * 60)
+    firmware.quiet_blanked = False
+
     # ------------------------------------------- the grid and the strip ---
     # push() blanks everything outside [offset, used), so a grid cell must
     # never hold a pixel from outside it -- anything there is lit by the

@@ -135,6 +135,28 @@ home wifi it stays off — hijacking name lookups on somebody's own network
 would be plain wrong — and guests reach it at its address instead. Turn it
 off entirely under **Admin → Wifi → Captive portal**.
 
+## Quiet hours
+
+The tree turns itself off overnight — **22:00 to 06:00** out of the box,
+changeable under **Admin › Quiet hours**, or switch it off entirely.
+
+It only stops the tree running its own show. Open the app and play, or
+press the buttons, and the lights come on as usual; when you stop, it goes
+dark again rather than returning to the idle show.
+
+**The board has no clock of its own.** There is no battery-backed clock on
+a Pico, so on power-up it has no idea what time it is. It is told by
+whichever browser opens the page — including the captive-portal pop-up —
+so the first phone to connect after a power cut puts it right without
+anyone thinking about it. Until something does, quiet hours are not
+applied: a tree dark all evening because it thinks it is three in the
+morning would be far worse than one left on.
+
+Anyone can tell the tree the time, since it cannot know on its own and the
+point is that it happens by itself. *When* it sleeps is behind the admin
+login. An open page keeps the clock in step, so setting it by hand only
+sticks once every browser has gone.
+
 ## Signing in
 
 The tree's **setup** is behind a login; playing is not. Anyone on the
@@ -467,6 +489,7 @@ firmware's own debouncing, not around it.
 | `GET` | `/api/geometry` | Loop lengths and the per-pixel angle/height tables (hex) |
 | `GET` | `/api/frame` | The frame currently on the tree, as hex |
 | `GET` | `/api/input` | Drain queued button presses (used as a controller by the web app) |
+| `POST` | `/api/time` | Tell the board the time, as minutes past midnight (open to anyone) |
 | `POST` | `/api/login` | Sign in; sets an HttpOnly session cookie |
 | `POST` | `/api/logout` | End the session |
 | `POST` | `/api/password` | Change the admin email or password (signed in) |

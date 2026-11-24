@@ -254,6 +254,16 @@ lead-in 12            pixels before loop 1
     <button data-wrap="ring">Snake stays on its ring</button>
   </div>
 
+  <h2>Quiet hours</h2>
+  <div class="hint">The tree turns itself off overnight. It still lights up if someone opens the app or presses the buttons — this only stops it running its own show. <b>The board has no clock of its own</b>, so it is told the time by whichever phone opens this page; after a power cut it waits for that before sleeping again.</div>
+  <div class="rawstatus" id="clockStatus"></div>
+  <label class="check"><input type="checkbox" id="quietEnabled"> Turn the tree off overnight</label>
+  <div id="quietFields">
+    <label class="field">Off at <input type="time" id="quietFrom"></label>
+    <label class="field">On again at <input type="time" id="quietTo"></label>
+  </div>
+  <div class="row"><button id="clockSet">Set the time from this device</button></div>
+
   <h2>Buttons</h2>
   <div class="hint">Optional. Wire each switch between its pin and ground — no resistors needed. While the tree is running its own show the buttons change pattern (◀ ▶) and brightness (▲ ▼), and <b>select</b> starts Snake on the tree itself. While a phone is playing, the buttons work as a controller for it.</div>
   <label class="check"><input type="checkbox" id="buttonsEnabled"> Use physical buttons</label>

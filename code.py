@@ -148,8 +148,12 @@ _slice_assign = True
 
 def push(colors):
     """Write a whole frame to the strip and latch it."""
-    global _slice_assign, frames_shown
+    global _slice_assign, frames_shown, quiet_blanked
     frames_shown += 1
+    # Something has lit the strip, so the quiet-hours blank no longer holds.
+    # Without this, a phone that plays at midnight and then walks away
+    # leaves its last frame burning until morning.
+    quiet_blanked = False
     # Pixels before the first loop are the lead-in from the controller, and
     # anything past the last loop is spare strip.  Neither is on the tree, so
     # keep them dark whatever drew the frame.
@@ -171,6 +175,15 @@ def push(colors):
 
 
 def blank():
+    """Turn the strip off, and remember that we did.
+
+    The frame buffer is cleared too, not just the LEDs: it is what
+    /api/frame hands back, so leaving the last picture in it would have the
+    page cheerfully animating a tree that is actually dark -- which is
+    precisely the sort of disagreement that is baffling to diagnose.
+    """
+    for i in range(geo.n):
+        frame[i] = (0, 0, 0)
     pixels.fill((0, 0, 0))
     pixels.show()
 
@@ -234,6 +247,56 @@ def connected_clients():
         return len(wifi.radio.stations_ap)
     except Exception:
         return -1
+
+
+# --------------------------------------------------------------------------
+# The clock, and quiet hours
+# --------------------------------------------------------------------------
+# There is no battery-backed clock on this board, so on power-up it does not
+# know the time.  Any browser that opens the page tells it, which means the
+# first phone to connect after a power cut puts it right.  Until something
+# does, quiet hours are not applied: a tree dark all evening because it
+# thinks it is three in the morning would be far worse than one left on.
+clock_minutes = None   # minutes past midnight when the clock was last set
+clock_set_at = 0.0     # monotonic reading at that moment
+quiet_blanked = False
+
+
+def set_clock(minutes):
+    global clock_minutes, clock_set_at
+    minutes = int(minutes) % 1440
+    clock_minutes = minutes
+    clock_set_at = time.monotonic()
+    return minutes
+
+
+def now_minutes():
+    """Minutes past midnight, or None if nobody has said what time it is."""
+    if clock_minutes is None:
+        return None
+    elapsed = (time.monotonic() - clock_set_at) / 60.0
+    return int(clock_minutes + elapsed) % 1440
+
+
+def quiet_now():
+    if not cfg["quiet_enabled"]:
+        return False
+    minutes = now_minutes()
+    if minutes is None:
+        return False
+    return tree.in_quiet_hours(minutes, cfg["quiet_from"], cfg["quiet_to"])
+
+
+def clock_payload():
+    minutes = now_minutes()
+    return {
+        "known": minutes is not None,
+        "minutes": minutes,
+        "quiet": quiet_now(),
+        "enabled": bool(cfg["quiet_enabled"]),
+        "from": cfg["quiet_from"],
+        "to": cfg["quiet_to"],
+    }
 
 
 # --------------------------------------------------------------------------
@@ -590,6 +653,7 @@ def state_payload(authed=False):
             "labels": list(button_driver.LABELS),
         },
         "onboard_game": onboard_game is not None,
+        "clock": clock_payload(),
         "portal": {
             "running": portal_running(),
             "answered": portal.answered if portal else 0,
@@ -656,6 +720,26 @@ def route_state(request: Request):
 @server.route("/api/geometry")
 def route_geometry(request: Request):
     return JSONResponse(request, geo.describe())
+
+
+@server.route("/api/time", POST)
+def route_time(request: Request):
+    """Tell the board what time it is.
+
+    Open to any device on purpose: the board cannot know the time on its
+    own, and the point is that whichever phone opens the page first after a
+    power cut sets it right without anyone thinking about it.  *When* the
+    tree sleeps is a different matter and stays behind the admin login.
+    """
+    payload = body_json(request)
+    try:
+        minutes = int(payload.get("minutes"))
+    except (TypeError, ValueError):
+        return JSONResponse(
+            request, {"error": "minutes past midnight, please"}, status=(400, "Bad Request")
+        )
+    set_clock(minutes)
+    return JSONResponse(request, {"clock": clock_payload()})
 
 
 @server.route("/api/login", POST)
@@ -1044,7 +1128,7 @@ def step(now):
     (see tools/test_firmware.py).
     """
     global mode, cycle_started_at, last_render_at, config_dirty, last_config_save
-    global frames_shown, frames_window_at, frames_per_second
+    global frames_shown, frames_window_at, frames_per_second, quiet_blanked
 
     if now - frames_window_at >= 1.0:
         frames_per_second = frames_shown / (now - frames_window_at)
@@ -1078,6 +1162,19 @@ def step(now):
 
     if mode != MODE_IDLE:
         return
+
+    # Quiet hours only stop the tree lighting itself up.  Somebody who opens
+    # the app and plays, or presses the buttons, still gets lights -- they
+    # are plainly there and meant to.  When they stop, it goes dark again
+    # rather than returning to the idle show.
+    if quiet_now():
+        if not quiet_blanked:
+            quiet_blanked = True
+            blank()
+        return
+    if quiet_blanked:
+        quiet_blanked = False
+        last_render_at = 0.0
 
     if now - last_render_at < 1.0 / cfg["fps"]:
         return

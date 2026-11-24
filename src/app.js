@@ -62,10 +62,34 @@ const App = {
     setInterval(() => { if (!this.live) this.refresh().catch(() => {}); }, 6000);
   },
 
+  /* The board has no clock, so tell it the time whenever we talk to it and
+   * it is adrift.  Whoever opens the page first after a power cut puts it
+   * right without having to think about it. */
+  async syncClock() {
+    const clock = this.state && this.state.clock;
+    if (!clock) return;
+    const now = new Date();
+    const mine = now.getHours() * 60 + now.getMinutes();
+    let adrift = !clock.known;
+    if (clock.known) {
+      let gap = Math.abs(mine - clock.minutes);
+      if (gap > 720) gap = 1440 - gap;     // across midnight
+      adrift = gap >= 2;
+    }
+    if (!adrift) return;
+    try {
+      const result = await this.post('/api/time', { minutes: mine });
+      this.state.clock = result.clock;
+    } catch (err) {
+      /* the board will ask again next time */
+    }
+  },
+
   async refresh() {
     this.state = await this.get('/api/state');
     if (!this.live) this.boardMode = this.state.mode;
     this.setGeometry(await this.get('/api/geometry'));
+    await this.syncClock();
     this.setStatus();
     if (Admin.ready) Admin.syncFromState();
     if (Idle.ready) Idle.syncFromState();
@@ -570,6 +594,13 @@ const App = {
     // everything look broken while the preview looks perfectly normal: the
     // preview draws the tree it was told about, so 52 pixels fill the canvas
     // exactly as 600 would.  Say so wherever you are, not just in Admin.
+    const clock = state.clock || {};
+    if (clock.quiet) {
+      note.textContent = 'quiet hours — the tree stays off until '
+        + formatMinutes(clock.to) + ' unless you play with it';
+      note.style.color = 'var(--gold)';
+      return;
+    }
     const dark = this.n - (this.used - this.offset);
     if (dark > 0) {
       note.textContent = 'only ' + (this.used - this.offset) + ' of ' + this.n
@@ -619,6 +650,23 @@ for (let v = 0; v < 256; v++) {
 }
 function toScreen(value) {
   return SCREEN[value];
+}
+
+/* 1320 -> "22:00" */
+function formatMinutes(minutes) {
+  if (minutes === null || minutes === undefined) return '--:--';
+  const m = ((Math.round(minutes) % 1440) + 1440) % 1440;
+  return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+}
+
+/* "22:00" -> 1320 */
+function parseMinutes(text) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(text || '').trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const mins = Number(match[2]);
+  if (hours > 23 || mins > 59) return null;
+  return hours * 60 + mins;
 }
 
 function unhex(text) {
